@@ -72,6 +72,42 @@ describe('DocumentProvider', () => {
     expect(second.result.current.doc.objects[0].duration).toBe(7);
   });
 
+  it('copy + paste with a selection places the clone at the selected object\'s position', () => {
+    const { result } = renderHook(() => useDocument(), { wrapper });
+    const selId = result.current.doc.objects[0].id;
+    // Move the selected one to position 6, then copy and paste.
+    act(() => result.current.updateObject(selId, { position: 6, duration: 4 }));
+    act(() => result.current.setSelectedId(selId));
+    act(() => result.current.copySelected());
+    expect(result.current.clipboardSize).toBe(1);
+    act(() => result.current.paste());
+    // New object exists with position 6.
+    const pasted = result.current.doc.objects.find((o) => o.id !== selId);
+    expect(pasted).toBeDefined();
+    expect(pasted!.position).toBe(6);
+    // Selection moved to the pasted object.
+    expect(result.current.selectedId).toBe(pasted!.id);
+  });
+
+  it('paste with nothing selected appends after the last object\'s right edge', () => {
+    const { result } = renderHook(() => useDocument(), { wrapper });
+    const selId = result.current.doc.objects[0].id;
+    act(() => result.current.updateObject(selId, { position: 0, duration: 4 }));
+    act(() => result.current.setSelectedId(selId));
+    act(() => result.current.copySelected());
+    act(() => result.current.setSelectedId(null));
+    act(() => result.current.paste());
+    const pasted = result.current.doc.objects.find((o) => o.id !== selId);
+    expect(pasted!.position).toBe(4);
+  });
+
+  it('paste is a no-op when clipboard is empty', () => {
+    const { result } = renderHook(() => useDocument(), { wrapper });
+    const countBefore = result.current.doc.objects.length;
+    act(() => result.current.paste());
+    expect(result.current.doc.objects.length).toBe(countBefore);
+  });
+
   it('cycleSelectAt picks the first hit, then advances on repeated taps', () => {
     const { result } = renderHook(() => useDocument(), { wrapper });
     // Add a second overlapping object.

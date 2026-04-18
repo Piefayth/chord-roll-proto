@@ -34,7 +34,6 @@ function loadPersistedDoc(): { doc: DocumentState; idCounter: number } | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { doc: DocumentState; idCounter: number };
     if (!parsed || typeof parsed !== 'object' || !parsed.doc) return null;
-    // Light validation: ensure required fields exist.
     if (!Array.isArray(parsed.doc.objects) || typeof parsed.doc.tempo !== 'number') return null;
     return parsed;
   } catch {
@@ -68,6 +67,10 @@ export function defaultObject(position: number, duration = 4): TimelineObject {
   };
 }
 
+function cloneObjectWithNewId(obj: TimelineObject): TimelineObject {
+  return JSON.parse(JSON.stringify({ ...obj, id: nextId() })) as TimelineObject;
+}
+
 interface DocumentCtx {
   doc: DocumentState;
   selectedId: string | null;
@@ -82,6 +85,9 @@ interface DocumentCtx {
   setTempo: (bpm: number) => void;
   playing: boolean;
   setPlaying: (v: boolean) => void;
+  clipboardSize: number;
+  copySelected: () => void;
+  paste: () => void;
 }
 
 const Ctx = createContext<DocumentCtx | null>(null);
@@ -94,18 +100,15 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
     persisted?.doc.objects[0]?.id ?? initialObject.id
   );
   const [playing, setPlaying] = useState(false);
+  const [clipboard, setClipboard] = useState<TimelineObject[]>([]);
   const lastCyclePoint = useRef<{ beat: number; pitch: number } | null>(null);
 
-  // Persist on every document change.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
-      window.localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({ doc, idCounter: _idCounter })
-      );
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ doc, idCounter: _idCounter }));
     } catch {
-      /* quota / privacy mode — silently ignore */
+      /* ignore */
     }
   }, [doc]);
 
@@ -168,6 +171,37 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
     setDoc((d) => ({ ...d, tempo: bpm }));
   }, []);
 
+  const copySelected = useCallback(() => {
+    setDoc((d) => {
+      const obj = d.objects.find((o) => o.id === selectedId);
+      if (obj) setClipboard([JSON.parse(JSON.stringify(obj)) as TimelineObject]);
+      return d;
+    });
+  }, [selectedId]);
+
+  const paste = useCallback(() => {
+    if (clipboard.length === 0) return;
+    setDoc((d) => {
+      // Anchor position: if selected, use its position; else append at end.
+      let anchor: number;
+      const sel = d.objects.find((o) => o.id === selectedId);
+      if (sel) {
+        anchor = sel.position;
+      } else {
+        anchor = d.objects.reduce((mx, o) => Math.max(mx, o.position + o.duration), 0);
+      }
+      // Normalize clipboard's own earliest position to 0, then offset by anchor.
+      const minPos = clipboard.reduce((m, o) => Math.min(m, o.position), Infinity);
+      const inserted = clipboard.map((o) => ({
+        ...cloneObjectWithNewId(o),
+        position: anchor + (o.position - minPos),
+      }));
+      // Select the first newly-inserted object.
+      if (inserted.length > 0) setSelectedId(inserted[0].id);
+      return { ...d, objects: [...d.objects, ...inserted] };
+    });
+  }, [clipboard, selectedId]);
+
   const value = useMemo(
     () => ({
       doc,
@@ -182,6 +216,9 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
       setTempo,
       playing,
       setPlaying,
+      clipboardSize: clipboard.length,
+      copySelected,
+      paste,
     }),
     [
       doc,
@@ -194,6 +231,9 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
       cycleSelectAt,
       setTempo,
       playing,
+      clipboard,
+      copySelected,
+      paste,
     ]
   );
 

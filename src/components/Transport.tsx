@@ -4,11 +4,10 @@ import { renderDocument } from '../model/render';
 import { ensureAudio, play, schedule, stop } from '../audio/engine';
 
 export function Transport() {
-  const { doc, setTempo, playing, setPlaying, clearAll } = useDocument();
+  const { doc, setTempo, playing, setPlaying, clearAll, paste, clipboardSize } = useDocument();
   const initRef = useRef(false);
   const lastSnap = useRef<string>('');
 
-  // When doc changes while playing, reschedule.
   useEffect(() => {
     if (!initRef.current) return;
     const notes = renderDocument(doc);
@@ -52,6 +51,15 @@ export function Transport() {
           onChange={(e) => setTempo(Number(e.target.value))}
         />
       </label>
+      <button
+        type="button"
+        className="transport-clear"
+        aria-label="paste"
+        disabled={clipboardSize === 0}
+        onClick={paste}
+      >
+        paste
+      </button>
       <button
         type="button"
         className="transport-clear"
