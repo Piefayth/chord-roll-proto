@@ -68,8 +68,12 @@ body {
   flex: 0 0 auto;
   max-height: 50vh;
   -webkit-overflow-scrolling: touch;
+  /* Default — allow native two-direction scrolling on empty space. Regions
+     set touch-action: none on their own <g>s so dragging a region doesn't
+     scroll the container. */
+  touch-action: auto;
 }
-.piano-roll-wrap { display: inline-block; }
+.piano-roll-wrap { display: inline-block; min-width: 100%; }
 
 .inspector {
   flex: 1;
@@ -305,7 +309,22 @@ input[type="range"]::-moz-range-thumb {
   font-style: italic;
 }
 
-.roll-scroll { touch-action: pan-x pinch-zoom; }
+.inspector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.inspector-delete {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.inspector-delete:hover { background: rgba(239, 68, 68, 0.08); }
 
 @media (min-width: 720px) {
   .stage { flex-direction: row; }

@@ -26,6 +26,47 @@ export function classifyZone(box: Box, px: number, py: number, edgeZone: number)
   return 'body';
 }
 
+// Proportional inner edge zone for a given side length: 33% of it, clamped.
+export function innerEdgeZone(sideLength: number, min = 10, max = 16): number {
+  return Math.max(min, Math.min(max, Math.floor(sideLength * 0.33)));
+}
+
+// Extended classification with a zone of `outer` pixels *outside* the box. Outer
+// zones always win (they're how you grab a thin region). Inner zones are only
+// active when `selected` is true, so a casual tap on a region is treated as a
+// body gesture (select / move) rather than an accidental edge drag.
+// Returns null if the point is outside the inflated (box + outer) rect.
+export function classifyZoneExtended(
+  box: Box,
+  px: number,
+  py: number,
+  outer: number,
+  selected: boolean
+): DragZone | null {
+  if (
+    px < box.x - outer ||
+    px > box.x + box.width + outer ||
+    py < box.y - outer ||
+    py > box.y + box.height + outer
+  ) {
+    return null;
+  }
+  if (py < box.y) return 'top';
+  if (py > box.y + box.height) return 'bottom';
+  if (px < box.x) return 'left';
+  if (px > box.x + box.width) return 'right';
+  if (!selected) return 'body';
+  const hZone = innerEdgeZone(box.width);
+  const vZone = innerEdgeZone(box.height);
+  const xIn = px - box.x;
+  const yIn = py - box.y;
+  if (xIn < hZone) return 'left';
+  if (xIn > box.width - hZone) return 'right';
+  if (yIn < vZone) return 'top';
+  if (yIn > box.height - vZone) return 'bottom';
+  return 'body';
+}
+
 // Returns region boxes that contain the point, ordered topmost-first.
 // `ids` is aligned with `boxes`; results preserve that ordering reversed.
 export function hitTest<T>(boxes: { box: Box; id: T }[], px: number, py: number): T[] {

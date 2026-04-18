@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import type { DocumentState, RenderedNote, TimelineObject } from '../model/types';
 import { renderObject } from '../model/render';
 import { pcName } from '../model/chords';
 import { addBottom, addTop, removeBottom, removeTop } from '../model/pitchOps';
+import { classifyZoneExtended } from '../model/gestureOps';
 
 const MIN_PITCH = 36; // C2
 const MAX_PITCH = 96; // C7
@@ -10,15 +11,15 @@ const PITCH_ROW_PX = 8;
 const BEAT_PX = 64;
 const REGION_PAD = 4;
 const RULER_HEIGHT = 18;
-const EDGE_ZONE = 16; // px; thickness of draggable edge overlay
-const EDGE_TRIGGER_PX = 18; // px of vertical drag to add/remove a pitch class
-const BEAT_QUANTIZE = 0.25; // snap-to-quarter-beat for position/duration
-const DRAG_START_THRESHOLD = 4; // px before a tap counts as a drag
+const OUTER_HANDLE = 14; // px of hit area extending outside the region
+const EDGE_TRIGGER_PX = 18; // px of vertical drag per pitch add/remove step
+const BEAT_QUANTIZE = 0.25;
+const DRAG_START_THRESHOLD = 4;
 
 interface Props {
   doc: DocumentState;
   selectedId: string | null;
-  currentBeat: number; // playhead position in beats; <0 to hide
+  currentBeat: number; // <0 to hide
   totalBeats?: number;
   onSelect?: (id: string | null) => void;
   onCycleSelectAt?: (beat: number, pitch: number) => void;
@@ -46,7 +47,7 @@ interface ActiveDrag {
   origPosition: number;
   origDuration: number;
   origCenterNote: number;
-  lastStepCount: number; // integer threshold count of dy/EDGE_TRIGGER_PX last emitted for pitch edges
+  lastStepCount: number;
   didMove: boolean;
 }
 
@@ -65,6 +66,8 @@ function xToBeat(x: number): number {
 function quantize(beat: number): number {
   return Math.max(0, Math.round(beat / BEAT_QUANTIZE) * BEAT_QUANTIZE);
 }
+
+// Classification is delegated to the pure helper in gestureOps.
 
 export function PianoRoll({
   doc,
@@ -99,23 +102,6 @@ export function PianoRoll({
   const pitchRows = MAX_PITCH - MIN_PITCH + 1;
   const totalHeight = RULER_HEIGHT + pitchRows * PITCH_ROW_PX;
 
-  // Classify which zone of an object's bounding box the pointerdown landed in.
-  const classifyZone = (geom: ObjectGeometry, localX: number, localY: number): DragZone => {
-    const xIn = localX - geom.x;
-    const yIn = localY - geom.y;
-    const isLeft = xIn < EDGE_ZONE;
-    const isRight = xIn > geom.width - EDGE_ZONE;
-    const isTop = yIn < EDGE_ZONE;
-    const isBottom = yIn > geom.height - EDGE_ZONE;
-    // Priority: corners fall back to horizontal (resize wins over pitch).
-    if (isLeft) return 'left';
-    if (isRight) return 'right';
-    if (isTop) return 'top';
-    if (isBottom) return 'bottom';
-    return 'body';
-  };
-
-  // Convert a pointer event to SVG-local coordinates.
   const svgCoords = useCallback((clientX: number, clientY: number): { x: number; y: number } => {
     const svg = svgRef.current;
     if (!svg) return { x: 0, y: 0 };
@@ -128,73 +114,38 @@ export function PianoRoll({
     return { x: local.x, y: local.y };
   }, []);
 
-  const onSvgPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+  // Pointer handlers are attached to individual region <g>s. Each <g> sets
+  // touch-action: none so iOS won't try to scroll while you drag it. The
+  // outer scroll container keeps its default touch-action so empty space
+  // allows two-direction panning.
+  const beginRegionDrag = (obj: TimelineObject, geom: ObjectGeometry, e: React.PointerEvent) => {
     if (e.button !== undefined && e.button !== 0) return;
     const { x, y } = svgCoords(e.clientX, e.clientY);
-    if (y < RULER_HEIGHT) return; // ignore ruler area
-    // Figure out which object (if any) the point is inside. Check in reverse
-    // render order so topmost wins.
-    const hits: ObjectGeometry[] = [];
-    for (let i = geometries.length - 1; i >= 0; i--) {
-      const g = geometries[i];
-      if (x >= g.x && x <= g.x + g.width && y >= g.y && y <= g.y + g.height) hits.push(g);
-    }
-    if (hits.length === 0) {
-      // Tap on empty roll: track pointer; create on up only if it was a tap (no significant move).
-      const startBeat = Math.max(0, xToBeat(x));
-      const startX = e.clientX;
-      const startY = e.clientY;
-      let moved = false;
-      const onMove = (ev: PointerEvent) => {
-        if (Math.abs(ev.clientX - startX) > DRAG_START_THRESHOLD || Math.abs(ev.clientY - startY) > DRAG_START_THRESHOLD) {
-          moved = true;
-        }
-      };
-      const onUp = () => {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        window.removeEventListener('pointercancel', onUp);
-        if (!moved) {
-          onSelect?.(null);
-          onCreate?.(quantize(startBeat));
-        }
-      };
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
-      window.addEventListener('pointercancel', onUp);
-      return;
-    }
-    // One or more objects under pointer; use the topmost.
-    const target = hits[0];
-    // Determine the zone.
-    const zone = classifyZone(target, x, y);
-    // Start tracking a drag.
+    const selected = obj.id === selectedId;
+    const zone = classifyZoneExtended(geom, x, y, OUTER_HANDLE, selected) ?? 'body';
     const drag: ActiveDrag = {
       pointerId: e.pointerId,
       zone,
-      objId: target.obj.id,
+      objId: obj.id,
       startX: e.clientX,
       startY: e.clientY,
-      origPosition: target.obj.position,
-      origDuration: target.obj.duration,
-      origCenterNote: target.obj.voicing.centerNote,
+      origPosition: obj.position,
+      origDuration: obj.duration,
+      origCenterNote: obj.voicing.centerNote,
       lastStepCount: 0,
       didMove: false,
     };
     dragRef.current = drag;
-    try { (e.target as Element).setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
-    e.preventDefault();
+    try { (e.currentTarget as Element).setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
+    e.stopPropagation();
   };
 
-  const onSvgPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+  const onRegionPointerMove = (e: React.PointerEvent) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== e.pointerId) return;
     const dx = e.clientX - drag.startX;
     const dy = e.clientY - drag.startY;
     if (!drag.didMove && Math.hypot(dx, dy) > DRAG_START_THRESHOLD) drag.didMove = true;
-    // Convert pixel deltas to world units. A mobile svg may be scaled by CSS
-    // layout, but for a direct SVG with fixed viewBox, 1 client px ≈ 1 svg px
-    // at default zoom. Good enough for the prototype.
     const beatDelta = dx / BEAT_PX;
     const pitchDelta = -dy / PITCH_ROW_PX;
     const obj = doc.objects.find((o) => o.id === drag.objId);
@@ -218,7 +169,6 @@ export function PianoRoll({
         break;
       }
       case 'left': {
-        // Move position right = shrink; move position left = grow. Anchor right edge.
         const rawPos = quantize(drag.origPosition + beatDelta);
         const anchorRight = drag.origPosition + drag.origDuration;
         const nextPos = Math.max(0, Math.min(rawPos, anchorRight - BEAT_QUANTIZE));
@@ -229,7 +179,6 @@ export function PianoRoll({
         break;
       }
       case 'top': {
-        // Top edge: drag down (dy+) removes from top; drag up (dy-) adds on top.
         const steps = Math.trunc(dy / EDGE_TRIGGER_PX);
         const delta = steps - drag.lastStepCount;
         if (delta !== 0) {
@@ -240,7 +189,6 @@ export function PianoRoll({
         break;
       }
       case 'bottom': {
-        // Bottom edge: drag down (dy+) re-adds root; drag up (dy-) removes bottom.
         const steps = Math.trunc(dy / EDGE_TRIGGER_PX);
         const delta = steps - drag.lastStepCount;
         if (delta !== 0) {
@@ -254,11 +202,11 @@ export function PianoRoll({
     forceRerender((n) => n + 1);
   };
 
-  const onSvgPointerUp = (e: React.PointerEvent<SVGSVGElement>) => {
+  const onRegionPointerUp = (e: React.PointerEvent) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== e.pointerId) return;
-    // If the gesture was a tap (no drag), select or cycle-select the object.
     if (!drag.didMove) {
+      // Tap without a drag → select / cycle on stacked.
       const { x, y } = svgCoords(e.clientX, e.clientY);
       const beat = xToBeat(x);
       const pitch = yToPitch(y - RULER_HEIGHT);
@@ -268,15 +216,45 @@ export function PianoRoll({
     dragRef.current = null;
   };
 
-  // Prevent default touch behavior (pull-to-refresh, scroll) so vertical body
-  // drags on regions actually move the region rather than scrolling the page.
-  useEffect(() => {
-    const svg = svgRef.current;
-    if (!svg) return;
-    const prevent = (e: TouchEvent) => e.preventDefault();
-    svg.addEventListener('touchmove', prevent, { passive: false });
-    return () => svg.removeEventListener('touchmove', prevent);
-  }, []);
+  // Background pointer: empty-space tap creates an object (when no movement
+  // occurred). If the user scrolls with this same gesture, the browser fires
+  // pointercancel (or pointermove with significant delta) and we suppress.
+  const onBackgroundPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    // Skip if the target element is a region handle (React handles that separately).
+    const { x, y } = svgCoords(e.clientX, e.clientY);
+    if (y < RULER_HEIGHT) return;
+    const startBeat = Math.max(0, xToBeat(x));
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let moved = false;
+    const onMove = (ev: PointerEvent) => {
+      if (
+        Math.abs(ev.clientX - startX) > DRAG_START_THRESHOLD ||
+        Math.abs(ev.clientY - startY) > DRAG_START_THRESHOLD
+      ) {
+        moved = true;
+      }
+    };
+    const cleanup = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+    };
+    const onUp = () => {
+      cleanup();
+      if (!moved) {
+        onSelect?.(null);
+        onCreate?.(quantize(startBeat));
+      }
+    };
+    const onCancel = () => {
+      cleanup();
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+  };
 
   return (
     <div className="piano-roll-wrap" data-testid="piano-roll">
@@ -287,11 +265,8 @@ export function PianoRoll({
         viewBox={`0 0 ${totalWidth} ${totalHeight}`}
         role="img"
         aria-label="piano roll"
-        style={{ touchAction: 'none', display: 'block' }}
-        onPointerDown={onSvgPointerDown}
-        onPointerMove={onSvgPointerMove}
-        onPointerUp={onSvgPointerUp}
-        onPointerCancel={onSvgPointerUp}
+        style={{ display: 'block', touchAction: 'auto' }}
+        onPointerDown={onBackgroundPointerDown}
       >
         {/* Ruler */}
         <g>
@@ -321,7 +296,7 @@ export function PianoRoll({
           ))}
         </g>
         <g transform={`translate(0, ${RULER_HEIGHT})`}>
-          {/* horizontal pitch rows */}
+          {/* pitch rows */}
           {Array.from({ length: pitchRows }).map((_, i) => {
             const pitch = MAX_PITCH - i;
             const pc = ((pitch % 12) + 12) % 12;
@@ -338,7 +313,7 @@ export function PianoRoll({
               />
             );
           })}
-          {/* vertical beat lines */}
+          {/* beat lines */}
           {Array.from({ length: totalBeats + 1 }).map((_, i) => (
             <line
               key={i}
@@ -351,14 +326,34 @@ export function PianoRoll({
             />
           ))}
 
-          {/* objects */}
-          {geometries.map(({ obj, notes, x, y, width, height }) => {
+          {/* objects. note the transform is on the outer group; per-region <g>
+              is in the translated space, so its x/y are local. */}
+          {geometries.map((geom) => {
+            const { obj, notes, x, y, width, height } = geom;
             const selected = obj.id === selectedId;
             return (
-              <g key={obj.id} data-testid={`object-${obj.id}`}>
+              <g
+                key={obj.id}
+                data-testid={`object-${obj.id}`}
+                style={{ touchAction: 'none' }}
+                onPointerDown={(e) => beginRegionDrag(obj, geom, e)}
+                onPointerMove={onRegionPointerMove}
+                onPointerUp={onRegionPointerUp}
+                onPointerCancel={onRegionPointerUp}
+              >
+                {/* Hit-area halo: includes outer handle margin. Transparent
+                    fill so users can grab edges even on very thin regions. */}
+                <rect
+                  x={x - OUTER_HANDLE}
+                  y={y - RULER_HEIGHT - OUTER_HANDLE}
+                  width={width + OUTER_HANDLE * 2}
+                  height={height + OUTER_HANDLE * 2}
+                  fill="transparent"
+                  transform={`translate(0, ${RULER_HEIGHT})`}
+                />
                 <rect
                   x={x}
-                  y={y - RULER_HEIGHT} /* visually shift back up */
+                  y={y - RULER_HEIGHT}
                   width={width}
                   height={height}
                   fill={selected ? 'rgba(96, 165, 250, 0.22)' : 'rgba(96, 165, 250, 0.10)'}
@@ -380,44 +375,39 @@ export function PianoRoll({
                     transform={`translate(0, ${RULER_HEIGHT})`}
                   />
                 ))}
-                {/* edge handles visualized only when selected */}
                 {selected && (
                   <g transform={`translate(0, ${RULER_HEIGHT})`} pointerEvents="none">
-                    {/* top */}
+                    {/* top handle */}
                     <rect
-                      x={x + EDGE_ZONE}
-                      y={y - RULER_HEIGHT + 2}
-                      width={width - EDGE_ZONE * 2}
-                      height={2}
+                      x={x + 6}
+                      y={y - RULER_HEIGHT - 3}
+                      width={Math.max(12, width - 12)}
+                      height={3}
                       fill="#60a5fa"
-                      opacity={0.6}
                     />
-                    {/* bottom */}
+                    {/* bottom handle */}
                     <rect
-                      x={x + EDGE_ZONE}
-                      y={y - RULER_HEIGHT + height - 4}
-                      width={width - EDGE_ZONE * 2}
-                      height={2}
+                      x={x + 6}
+                      y={y - RULER_HEIGHT + height}
+                      width={Math.max(12, width - 12)}
+                      height={3}
                       fill="#60a5fa"
-                      opacity={0.6}
                     />
-                    {/* left */}
+                    {/* left handle */}
                     <rect
-                      x={x + 2}
-                      y={y - RULER_HEIGHT + EDGE_ZONE}
-                      width={2}
-                      height={height - EDGE_ZONE * 2}
+                      x={x - 3}
+                      y={y - RULER_HEIGHT + 6}
+                      width={3}
+                      height={Math.max(12, height - 12)}
                       fill="#60a5fa"
-                      opacity={0.6}
                     />
-                    {/* right */}
+                    {/* right handle */}
                     <rect
-                      x={x + width - 4}
-                      y={y - RULER_HEIGHT + EDGE_ZONE}
-                      width={2}
-                      height={height - EDGE_ZONE * 2}
+                      x={x + width}
+                      y={y - RULER_HEIGHT + 6}
+                      width={3}
+                      height={Math.max(12, height - 12)}
                       fill="#60a5fa"
-                      opacity={0.6}
                     />
                   </g>
                 )}
@@ -436,7 +426,6 @@ export function PianoRoll({
             );
           })}
 
-          {/* playhead */}
           {currentBeat >= 0 && (
             <line
               data-testid="playhead"
@@ -455,7 +444,6 @@ export function PianoRoll({
   );
 }
 
-// Dispatch helper used when the PianoRoll emits an abstract 'pitchSet' edit.
 export function applyPitchSetEdit(
   obj: TimelineObject,
   direction: 'removeTop' | 'addTop' | 'removeBottom' | 'addBottom'

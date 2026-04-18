@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   classifyZone,
+  classifyZoneExtended,
   hitTest,
+  innerEdgeZone,
   nextCycleSelection,
   pitchStepFromDrag,
   quantizeBeat,
@@ -29,6 +31,43 @@ describe('classifyZone', () => {
   it('prefers horizontal edges when corners qualify for both', () => {
     // top-left corner -> left wins
     expect(classifyZone(box, 102, 52, 16)).toBe('left');
+  });
+});
+
+describe('innerEdgeZone', () => {
+  it('clamps to min and max', () => {
+    expect(innerEdgeZone(10)).toBe(10);
+    expect(innerEdgeZone(100)).toBe(16);
+  });
+  it('scales in-between', () => {
+    expect(innerEdgeZone(36)).toBe(11); // 36 * 0.33 = 11.88 -> floor = 11
+  });
+});
+
+describe('classifyZoneExtended', () => {
+  const box = { x: 100, y: 50, width: 200, height: 60 };
+  it('returns null when outside the inflated box', () => {
+    expect(classifyZoneExtended(box, 0, 0, 14, true)).toBeNull();
+    expect(classifyZoneExtended(box, 500, 500, 14, true)).toBeNull();
+  });
+  it('grabs outer handle zones even when the region is not selected', () => {
+    // Directly above the top edge
+    expect(classifyZoneExtended(box, 200, 42, 14, false)).toBe('top');
+    // Directly below
+    expect(classifyZoneExtended(box, 200, 118, 14, false)).toBe('bottom');
+    // Left and right outer
+    expect(classifyZoneExtended(box, 90, 80, 14, false)).toBe('left');
+    expect(classifyZoneExtended(box, 310, 80, 14, false)).toBe('right');
+  });
+  it('returns body for interior points when not selected', () => {
+    expect(classifyZoneExtended(box, 110, 80, 14, false)).toBe('body');
+    expect(classifyZoneExtended(box, 200, 55, 14, false)).toBe('body');
+  });
+  it('applies inner edge zones once selected', () => {
+    // Near top edge (within innerEdgeZone of height=60 → 16 px)
+    expect(classifyZoneExtended(box, 200, 55, 14, true)).toBe('top');
+    // Interior
+    expect(classifyZoneExtended(box, 200, 80, 14, true)).toBe('body');
   });
 });
 

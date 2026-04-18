@@ -5,7 +5,7 @@ import { VoicingControls } from './VoicingControls';
 import { GeneratorControls } from './GeneratorControls';
 
 export function Inspector() {
-  const { doc, selectedId, updateObject } = useDocument();
+  const { doc, selectedId, updateObject, removeObject } = useDocument();
   const obj = doc.objects.find((o) => o.id === selectedId);
 
   if (!obj) {
@@ -23,6 +23,17 @@ export function Inspector() {
 
   return (
     <aside className="inspector" data-testid="inspector">
+      <div className="inspector-header">
+        <span className="chord-name">{obj.pitchSet.name}</span>
+        <button
+          type="button"
+          className="inspector-delete"
+          aria-label="delete selected object"
+          onClick={() => removeObject(obj.id)}
+        >
+          Delete
+        </button>
+      </div>
       <ChordPicker
         pitchSet={obj.pitchSet}
         onChange={(pitchSet) => updateObject(obj.id, { pitchSet })}
