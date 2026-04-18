@@ -1,5 +1,12 @@
 import type { PitchSet } from '../model/types';
-import { CHORD_SHAPES, EXTENSIONS, PITCH_CLASS_NAMES, inferChordLabel, pcName } from '../model/chords';
+import {
+  CHORD_SHAPES,
+  EXTENSIONS,
+  PITCH_CLASS_NAMES,
+  SCALE_SHAPES,
+  inferChordLabel,
+  pcName,
+} from '../model/chords';
 
 interface Props {
   pitchSet: PitchSet;
@@ -22,7 +29,21 @@ const SHAPE_LABELS: { key: keyof typeof CHORD_SHAPES; label: string }[] = [
   { key: 'alt7', label: 'alt' },
   { key: 'maj13', label: 'maj13' },
   { key: 'min13', label: 'm13' },
-  { key: 'dorianScale', label: 'dor' },
+];
+
+const SCALE_LABELS: { key: keyof typeof SCALE_SHAPES; label: string }[] = [
+  { key: 'ionian', label: 'maj' },
+  { key: 'aeolian', label: 'nat min' },
+  { key: 'dorian', label: 'dor' },
+  { key: 'phrygian', label: 'phr' },
+  { key: 'lydian', label: 'lyd' },
+  { key: 'mixolydian', label: 'mix' },
+  { key: 'locrian', label: 'loc' },
+  { key: 'harmonicMin', label: 'harm min' },
+  { key: 'melodicMin', label: 'mel min' },
+  { key: 'pentMaj', label: 'pent maj' },
+  { key: 'pentMin', label: 'pent min' },
+  { key: 'blues', label: 'blues' },
 ];
 
 export function ChordPicker({ pitchSet, onChange }: Props) {
@@ -31,6 +52,10 @@ export function ChordPicker({ pitchSet, onChange }: Props) {
   };
   const applyShape = (shapeKey: keyof typeof CHORD_SHAPES) => {
     const intervals = [...CHORD_SHAPES[shapeKey]];
+    onChange({ ...pitchSet, intervals, name: inferChordLabel(pitchSet.rootPC, intervals) });
+  };
+  const applyScale = (scaleKey: keyof typeof SCALE_SHAPES) => {
+    const intervals = [...SCALE_SHAPES[scaleKey]];
     onChange({ ...pitchSet, intervals, name: inferChordLabel(pitchSet.rootPC, intervals) });
   };
   const toggleInterval = (iv: number) => {
@@ -69,6 +94,21 @@ export function ChordPicker({ pitchSet, onChange }: Props) {
               type="button"
               className="pill"
               onClick={() => applyShape(key)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="row">
+        <label className="row-label">Scales</label>
+        <div className="pill-row">
+          {SCALE_LABELS.map(({ key, label }) => (
+            <button
+              key={key}
+              type="button"
+              className="pill"
+              onClick={() => applyScale(key)}
             >
               {label}
             </button>

@@ -425,7 +425,7 @@ export function PianoRoll({
                 y={y}
                 width={width}
                 height={height}
-                fill={selected ? 'rgba(96, 165, 250, 0.22)' : 'rgba(96, 165, 250, 0.10)'}
+                fill="none"
                 stroke={selected ? '#60a5fa' : '#3a5a8a'}
                 strokeWidth={selected ? 2 : 1}
                 rx={4}

@@ -63,4 +63,22 @@ describe('ChordPicker', () => {
     expect(next.intervals).toEqual([0, 3, 7, 10]);
     expect(next.name).toBe('Cm7');
   });
+
+  it('applies a scale preset (mixolydian)', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<ChordPicker pitchSet={initial} onChange={onChange} />);
+    await user.click(screen.getByRole('button', { name: 'mix' }));
+    const next = onChange.mock.calls[0][0] as PitchSet;
+    expect(next.intervals).toEqual([0, 2, 4, 5, 7, 9, 10]);
+  });
+
+  it('applies a pentatonic minor scale', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<ChordPicker pitchSet={initial} onChange={onChange} />);
+    await user.click(screen.getByRole('button', { name: 'pent min' }));
+    const next = onChange.mock.calls[0][0] as PitchSet;
+    expect(next.intervals).toEqual([0, 3, 5, 7, 10]);
+  });
 });

@@ -25,8 +25,24 @@ export const CHORD_SHAPES: Record<string, number[]> = {
   min11: [0, 3, 7, 10, 14, 17],
   maj13: [0, 4, 7, 11, 14, 21],
   min13: [0, 3, 7, 10, 14, 21],
-  // Dorian-friendly scale to support walking-bass demos.
-  dorianScale: [0, 2, 3, 5, 7, 9, 10],
+};
+
+// Scales: full pitch collections for melodic / walking-bass usage with
+// degreeSequence and cycle generators. Same model (a PitchSet); presented
+// separately in the inspector so users don't conflate them with chords.
+export const SCALE_SHAPES: Record<string, number[]> = {
+  ionian: [0, 2, 4, 5, 7, 9, 11], // major
+  dorian: [0, 2, 3, 5, 7, 9, 10],
+  phrygian: [0, 1, 3, 5, 7, 8, 10],
+  lydian: [0, 2, 4, 6, 7, 9, 11],
+  mixolydian: [0, 2, 4, 5, 7, 9, 10],
+  aeolian: [0, 2, 3, 5, 7, 8, 10], // natural minor
+  locrian: [0, 1, 3, 5, 6, 8, 10],
+  harmonicMin: [0, 2, 3, 5, 7, 8, 11],
+  melodicMin: [0, 2, 3, 5, 7, 9, 11],
+  pentMaj: [0, 2, 4, 7, 9],
+  pentMin: [0, 3, 5, 7, 10],
+  blues: [0, 3, 5, 6, 7, 10],
 };
 
 export function makePitchSet(rootPC: number, intervals: number[], name: string): PitchSet {
