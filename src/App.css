@@ -104,7 +104,7 @@ body {
 .inspector {
   flex: 1;
   overflow: auto;
-  padding: 8px 8px 80px;
+  padding: 0 8px 80px;
   -webkit-overflow-scrolling: touch;
 }
 .inspector.empty { padding: 20px; color: var(--muted); }
@@ -340,8 +340,8 @@ input[type="range"]::-moz-range-thumb {
   top: 0;
   z-index: 3;
   background: var(--bg);
-  margin: -8px -8px 8px;
-  padding: 10px 8px;
+  margin: 0 -8px 8px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
