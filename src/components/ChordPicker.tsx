@@ -1,5 +1,5 @@
 import type { PitchSet } from '../model/types';
-import { CHORD_SHAPES, EXTENSION_INTERVALS, PITCH_CLASS_NAMES, inferChordLabel, pcName } from '../model/chords';
+import { CHORD_SHAPES, EXTENSIONS, PITCH_CLASS_NAMES, inferChordLabel, pcName } from '../model/chords';
 
 interface Props {
   pitchSet: PitchSet;
@@ -15,6 +15,13 @@ const SHAPE_LABELS: { key: keyof typeof CHORD_SHAPES; label: string }[] = [
   { key: 'm7b5', label: 'm7♭5' },
   { key: 'dim7', label: 'dim7' },
   { key: 'sus4', label: 'sus4' },
+  { key: 'sus2', label: 'sus2' },
+  { key: 'maj9', label: 'maj9' },
+  { key: 'dom9', label: '9' },
+  { key: 'min9', label: 'm9' },
+  { key: 'alt7', label: 'alt' },
+  { key: 'maj13', label: 'maj13' },
+  { key: 'min13', label: 'm13' },
   { key: 'dorianScale', label: 'dor' },
 ];
 
@@ -71,18 +78,17 @@ export function ChordPicker({ pitchSet, onChange }: Props) {
       <div className="row">
         <label className="row-label">Extensions</label>
         <div className="pill-row">
-          {EXTENSION_INTERVALS.map((iv) => {
-            const active = pitchSet.intervals.includes(iv);
-            const nameMap: Record<number, string> = { 11: '7', 14: '9', 17: '11', 21: '13' };
+          {EXTENSIONS.map(({ interval, label }) => {
+            const active = pitchSet.intervals.includes(interval);
             return (
               <button
-                key={iv}
+                key={interval}
                 type="button"
                 aria-pressed={active}
                 className={`pill ${active ? 'selected' : ''}`}
-                onClick={() => toggleInterval(iv)}
+                onClick={() => toggleInterval(interval)}
               >
-                {nameMap[iv]}
+                {label}
               </button>
             );
           })}

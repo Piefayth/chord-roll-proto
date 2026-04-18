@@ -79,18 +79,16 @@ describe('VoicingControls', () => {
     expect(screen.getByLabelText('decrease octave span')).toBeInTheDocument();
   });
 
-  it('center stepper increments the center note', async () => {
-    const user = userEvent.setup();
-    const onChange = vi.fn();
+  it('does not render a Center control (handled by vertical drag on the roll)', () => {
     render(
       <VoicingControls
         pitchSet={pitchSet}
         voicing={voicing}
         generatorIsSequence={false}
-        onChange={onChange}
+        onChange={() => {}}
       />
     );
-    await user.click(screen.getByLabelText('raise center note'));
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ centerNote: 61 }));
+    expect(screen.queryByLabelText('raise center note')).toBeNull();
+    expect(screen.queryByLabelText('center note')).toBeNull();
   });
 });

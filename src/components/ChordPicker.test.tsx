@@ -26,10 +26,32 @@ describe('ChordPicker', () => {
   it('toggles a 9th extension', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(<ChordPicker pitchSet={initial} onChange={onChange} />);
-    await user.click(screen.getByRole('button', { name: '9' }));
+    const { container } = render(<ChordPicker pitchSet={initial} onChange={onChange} />);
+    // The Extensions row has the 9-labeled pill with aria-pressed.
+    const nineButtons = Array.from(container.querySelectorAll('button'))
+      .filter((b) => b.textContent === '9' && b.hasAttribute('aria-pressed'));
+    expect(nineButtons.length).toBe(1);
+    await user.click(nineButtons[0]);
     const next = onChange.mock.calls[0][0] as PitchSet;
     expect(next.intervals).toContain(14);
+  });
+
+  it('toggles a ♭9 extension', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<ChordPicker pitchSet={initial} onChange={onChange} />);
+    await user.click(screen.getByRole('button', { name: '♭9' }));
+    const next = onChange.mock.calls[0][0] as PitchSet;
+    expect(next.intervals).toContain(13);
+  });
+
+  it('toggles a #11 extension', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<ChordPicker pitchSet={initial} onChange={onChange} />);
+    await user.click(screen.getByRole('button', { name: '#11' }));
+    const next = onChange.mock.calls[0][0] as PitchSet;
+    expect(next.intervals).toContain(18);
   });
 
   it('applies a shape preset', async () => {

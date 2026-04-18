@@ -30,15 +30,16 @@ describe('resolveVoicing', () => {
     expect(resolveVoicing(Cmaj7, v)).toEqual([60, 64, 67, 71]);
   });
 
-  it('compactness > 0.5 raises the top voice an octave', () => {
-    const v = { ...baseVoicing, compactness: 0.6 };
-    // top B4 (71) -> B5 (83); rest remain.
-    expect(resolveVoicing(Cmaj7, v)).toEqual([60, 64, 67, 83]);
-  });
-
-  it('compactness > 0.75 raises the top two voices an octave', () => {
-    const v = { ...baseVoicing, compactness: 0.8 };
-    expect(resolveVoicing(Cmaj7, v)).toEqual([60, 64, 79, 83]);
+  it('compactness raises voices progressively from the top (N=3 upper voices, threshold i/(N+1))', () => {
+    // Cmaj7: [60,64,67,71]. 3 upper voices. Thresholds: 0.25, 0.5, 0.75.
+    // At cmp=0.1: no change.
+    expect(resolveVoicing(Cmaj7, { ...baseVoicing, compactness: 0.1 })).toEqual([60, 64, 67, 71]);
+    // At cmp=0.3: only top raised: 71 -> 83. -> [60, 64, 67, 83]
+    expect(resolveVoicing(Cmaj7, { ...baseVoicing, compactness: 0.3 })).toEqual([60, 64, 67, 83]);
+    // At cmp=0.6: top + 2nd raised: 71->83, 67->79.
+    expect(resolveVoicing(Cmaj7, { ...baseVoicing, compactness: 0.6 })).toEqual([60, 64, 79, 83]);
+    // At cmp=0.8: top + 2nd + 3rd raised: 71->83, 67->79, 64->76.
+    expect(resolveVoicing(Cmaj7, { ...baseVoicing, compactness: 0.8 })).toEqual([60, 76, 79, 83]);
   });
 
   it('bassSplit duplicates the lowest pitch one octave below', () => {

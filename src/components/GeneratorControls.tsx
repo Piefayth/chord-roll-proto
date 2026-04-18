@@ -2,6 +2,7 @@ import type { Generator, PitchPattern, RhythmSpec } from '../model/types';
 
 interface Props {
   generator: Generator;
+  voiceCount: number; // sizes the degree grid; 0 means "use a sensible default"
   onChange: (next: Generator) => void;
 }
 
@@ -17,6 +18,21 @@ const RHYTHM_OPTIONS: { kind: RhythmSpec['kind']; label: string }[] = [
   { kind: 'cascade', label: 'cascade' },
   { kind: 'periodic', label: 'periodic' },
   { kind: 'stepGrid', label: 'grid' },
+];
+
+const DEGREE_PRESETS: { label: string; build: (n: number) => number[] }[] = [
+  { label: 'Alberti', build: (n) => [0, n - 1, Math.floor(n / 2), n - 1] },
+  { label: 'up', build: (n) => Array.from({ length: n }, (_, i) => i) },
+  { label: 'down', build: (n) => Array.from({ length: n }, (_, i) => n - 1 - i) },
+  {
+    label: 'up-down',
+    build: (n) => {
+      const up = Array.from({ length: n }, (_, i) => i);
+      const down = Array.from({ length: n - 2 }, (_, i) => n - 2 - i);
+      return [...up, ...down];
+    },
+  },
+  { label: 'zigzag', build: (n) => (n >= 3 ? [0, 2, 1, n - 1] : [0, 1, 0, 1]) },
 ];
 
 function changePattern(prev: Generator, kind: PitchPattern['kind']): Generator {
@@ -45,7 +61,7 @@ function changeRhythm(prev: Generator, kind: RhythmSpec['kind']): Generator {
   return { ...prev, rhythm };
 }
 
-export function GeneratorControls({ generator, onChange }: Props) {
+export function GeneratorControls({ generator, voiceCount, onChange }: Props) {
   const { pitchPattern, rhythm } = generator;
   return (
     <section className="panel">
@@ -72,6 +88,7 @@ export function GeneratorControls({ generator, onChange }: Props) {
       {pitchPattern.kind === 'degreeSequence' && (
         <DegreesEditor
           degrees={pitchPattern.degrees}
+          voiceCount={Math.max(2, voiceCount || 4)}
           onChange={(degrees) => onChange({ ...generator, pitchPattern: { kind: 'degreeSequence', degrees } })}
         />
       )}
@@ -146,46 +163,88 @@ export function GeneratorControls({ generator, onChange }: Props) {
 
 function DegreesEditor({
   degrees,
+  voiceCount,
   onChange,
 }: {
   degrees: number[];
+  voiceCount: number;
   onChange: (next: number[]) => void;
 }) {
+  const rows = Math.max(voiceCount, Math.max(0, ...degrees) + 1);
+  const setStep = (step: number, voice: number) => {
+    const next = [...degrees];
+    next[step] = voice;
+    onChange(next);
+  };
+  const setLength = (len: number) => {
+    if (len < 1) return;
+    if (len === degrees.length) return;
+    if (len < degrees.length) return onChange(degrees.slice(0, len));
+    const extra = Array.from({ length: len - degrees.length }, () => 0);
+    onChange([...degrees, ...extra]);
+  };
   return (
-    <div className="row">
-      <label className="row-label">Degrees</label>
-      <div className="degrees-row" aria-label="degree sequence">
-        {degrees.map((d, i) => (
-          <span key={i} className="chip">
+    <>
+      <div className="row">
+        <label className="row-label">Presets</label>
+        <div className="pill-row">
+          {DEGREE_PRESETS.map(({ label, build }) => (
             <button
+              key={label}
               type="button"
-              aria-label={`decrease degree ${i}`}
-              onClick={() => onChange(degrees.map((v, j) => (j === i ? Math.max(0, v - 1) : v)))}
-            >−</button>
-            <span>{d}</span>
-            <button
-              type="button"
-              aria-label={`increase degree ${i}`}
-              onClick={() => onChange(degrees.map((v, j) => (j === i ? v + 1 : v)))}
-            >+</button>
-            <button
-              type="button"
-              aria-label={`remove degree ${i}`}
-              className="remove"
-              onClick={() => onChange(degrees.filter((_, j) => j !== i))}
-            >×</button>
-          </span>
-        ))}
-        <button
-          type="button"
-          className="pill"
-          aria-label="add degree"
-          onClick={() => onChange([...degrees, 0])}
-        >
-          +
-        </button>
+              className="pill"
+              onClick={() => onChange(build(voiceCount))}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
-    </div>
+      <div className="row">
+        <label className="row-label">Length {degrees.length}</label>
+        <div className="stepper">
+          <button
+            type="button"
+            aria-label="shorter sequence"
+            onClick={() => setLength(degrees.length - 1)}
+          >−</button>
+          <span className="value">{degrees.length}</span>
+          <button
+            type="button"
+            aria-label="longer sequence"
+            onClick={() => setLength(degrees.length + 1)}
+          >+</button>
+        </div>
+      </div>
+      <div className="row">
+        <label className="row-label">Sequence</label>
+        <div
+          className="degree-grid"
+          aria-label="degree grid"
+          style={{ gridTemplateColumns: `repeat(${degrees.length}, minmax(28px, 1fr))`, gridTemplateRows: `repeat(${rows}, 28px)` }}
+        >
+          {/* top row = highest voice index so grid reads like a pitch grid */}
+          {Array.from({ length: rows }).map((_, r) => {
+            const voiceIdx = rows - 1 - r;
+            return degrees.map((d, step) => {
+              const active = d === voiceIdx;
+              return (
+                <button
+                  key={`${r}-${step}`}
+                  type="button"
+                  className={`degree-cell ${active ? 'on' : ''}`}
+                  aria-pressed={active}
+                  aria-label={`step ${step} voice ${voiceIdx}`}
+                  onClick={() => setStep(step, voiceIdx)}
+                >
+                  {active ? voiceIdx : ''}
+                </button>
+              );
+            });
+          })}
+        </div>
+      </div>
+    </>
   );
 }
 

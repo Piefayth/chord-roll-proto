@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useDocument } from '../state/document';
 import { renderDocument } from '../model/render';
 import { ensureAudio, play, schedule, stop } from '../audio/engine';
 
 export function Transport() {
-  const { doc, setTempo } = useDocument();
-  const [playing, setPlaying] = useState(false);
+  const { doc, setTempo, playing, setPlaying } = useDocument();
   const initRef = useRef(false);
   const lastSnap = useRef<string>('');
 

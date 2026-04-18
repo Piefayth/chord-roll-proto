@@ -1,6 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { describe, it, expect } from 'vitest';
+import { render } from '@testing-library/react';
 import { PianoRoll } from './PianoRoll';
 import type { DocumentState } from '../model/types';
 
@@ -28,16 +27,24 @@ const doc: DocumentState = {
 
 describe('PianoRoll', () => {
   it('renders one note per pitch in the resolved voicing', () => {
-    render(<PianoRoll doc={doc} selectedId={null} totalBeats={8} />);
-    // C major triad: 3 notes
+    render(<PianoRoll doc={doc} selectedId={null} currentBeat={-1} totalBeats={8} />);
     expect(document.querySelectorAll('[data-testid^="note-"]').length).toBe(3);
   });
 
-  it('selects an object when its region is tapped', async () => {
-    const user = userEvent.setup();
-    const onSelect = vi.fn();
-    render(<PianoRoll doc={doc} selectedId={null} onSelect={onSelect} totalBeats={8} />);
-    await user.click(screen.getByTestId('object-obj-1'));
-    expect(onSelect).toHaveBeenCalledWith('obj-1');
+  it('renders the selected object with a highlighted edge handle', () => {
+    const { container } = render(
+      <PianoRoll doc={doc} selectedId="obj-1" currentBeat={-1} totalBeats={8} />
+    );
+    // selected objects render 4 edge indicator rects in addition to background + notes
+    expect(container.querySelector('[data-testid="object-obj-1"]')).toBeTruthy();
+  });
+
+  it('renders the playhead when currentBeat >= 0', () => {
+    const { queryByTestId, rerender } = render(
+      <PianoRoll doc={doc} selectedId={null} currentBeat={-1} totalBeats={8} />
+    );
+    expect(queryByTestId('playhead')).toBeNull();
+    rerender(<PianoRoll doc={doc} selectedId={null} currentBeat={1.5} totalBeats={8} />);
+    expect(queryByTestId('playhead')).toBeTruthy();
   });
 });

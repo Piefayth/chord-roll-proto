@@ -47,14 +47,18 @@ export function resolveVoicing(pitchSet: PitchSet, voicing: Voicing): number[] {
     cluster.push(next);
   }
 
-  // 4. Compactness: 0 = close cluster within an octave; higher = spread upper voices up by octaves.
+  // 4. Compactness (really "spread"): 0 = close cluster within an octave.
+  //    As compactness increases, raise upper voices an octave one by one, from
+  //    the top down. With N upper voices, voice i (counted from the top, 1-based)
+  //    lifts when compactness > i/(N+1) — so every slider region does something.
   const cmp = Math.max(0, Math.min(1, compactness));
+  const upperCount = cluster.length - 1;
   const spread = [...cluster];
-  if (cmp > 0.5 && spread.length >= 2) {
-    spread[spread.length - 1] += 12;
-  }
-  if (cmp > 0.75 && spread.length >= 3) {
-    spread[spread.length - 2] += 12;
+  for (let i = 1; i <= upperCount; i++) {
+    const threshold = i / (upperCount + 1);
+    if (cmp > threshold) {
+      spread[spread.length - i] += 12;
+    }
   }
   spread.sort((a, b) => a - b);
 

@@ -8,11 +8,6 @@ interface Props {
   onChange: (next: Voicing) => void;
 }
 
-function midiName(midi: number): string {
-  const oct = Math.floor(midi / 12) - 1;
-  return `${pcName(midi)}${oct}`;
-}
-
 export function VoicingControls({ pitchSet, voicing, generatorIsSequence, onChange }: Props) {
   const tones = [...new Set(pitchSet.intervals.map((iv) => ((pitchSet.rootPC + iv) % 12 + 12) % 12))];
 
@@ -20,29 +15,7 @@ export function VoicingControls({ pitchSet, voicing, generatorIsSequence, onChan
     <section className="panel">
       <h3>Voicing</h3>
 
-      <div className="row">
-        <label className="row-label">Center {midiName(voicing.centerNote)}</label>
-        <div className="stepper">
-          <button
-            type="button"
-            aria-label="lower center note"
-            onClick={() => onChange({ ...voicing, centerNote: Math.max(24, voicing.centerNote - 1) })}
-          >−</button>
-          <input
-            type="range"
-            min={36}
-            max={84}
-            value={voicing.centerNote}
-            aria-label="center note"
-            onChange={(e) => onChange({ ...voicing, centerNote: Number(e.target.value) })}
-          />
-          <button
-            type="button"
-            aria-label="raise center note"
-            onClick={() => onChange({ ...voicing, centerNote: Math.min(96, voicing.centerNote + 1) })}
-          >+</button>
-        </div>
-      </div>
+      <p className="hint">Drag the object vertically on the roll to shift register.</p>
 
       <div className="row">
         <label className="row-label">Bottom</label>

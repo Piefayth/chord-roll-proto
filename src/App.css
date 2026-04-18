@@ -275,6 +275,38 @@ input[type="range"]::-moz-range-thumb {
 }
 .step.on { background: var(--accent); border-color: var(--accent); }
 
+.degree-grid {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.degree-cell {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 3px;
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0;
+  min-height: 28px;
+}
+.degree-cell.on {
+  background: var(--accent);
+  color: #0a0f17;
+  border-color: var(--accent);
+  font-weight: 700;
+}
+
+.hint {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.roll-scroll { touch-action: pan-x pinch-zoom; }
+
 @media (min-width: 720px) {
   .stage { flex-direction: row; }
   .roll-scroll { max-height: none; flex: 1; border-bottom: none; border-right: 1px solid var(--border); }
