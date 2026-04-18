@@ -50,6 +50,15 @@ body {
   cursor: pointer;
 }
 .transport-btn.stop { background: var(--danger); color: #fff; }
+.transport-clear {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
 .tempo { display: flex; align-items: center; gap: 8px; color: var(--muted); }
 .tempo span { min-width: 60px; }
 .tempo input[type="range"] { width: 110px; }
@@ -72,7 +81,20 @@ body {
   touch-action: none;
   overscroll-behavior: contain;
 }
-.piano-roll-wrap { display: inline-block; min-width: 100%; }
+.piano-roll-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 100%;
+}
+.piano-ruler {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: block;
+  background: #111722;
+  box-shadow: 0 1px 0 var(--border);
+}
+.piano-grid { display: block; }
 
 .inspector {
   flex: 1;

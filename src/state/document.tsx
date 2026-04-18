@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { DocumentState, PitchSet, TimelineObject, Voicing } from '../model/types';
 import { inferChordLabel } from '../model/chords';
@@ -24,6 +24,23 @@ const initialObject: TimelineObject = {
 };
 
 const initialDoc: DocumentState = { tempo: 120, objects: [initialObject] };
+
+const STORAGE_KEY = 'chord-roll-doc-v1';
+
+function loadPersistedDoc(): { doc: DocumentState; idCounter: number } | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { doc: DocumentState; idCounter: number };
+    if (!parsed || typeof parsed !== 'object' || !parsed.doc) return null;
+    // Light validation: ensure required fields exist.
+    if (!Array.isArray(parsed.doc.objects) || typeof parsed.doc.tempo !== 'number') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 
 let _idCounter = 2;
 function nextId(): string {
@@ -56,9 +73,11 @@ interface DocumentCtx {
   selectedId: string | null;
   setSelectedId: (id: string | null) => void;
   updateObject: (id: string, patch: Partial<TimelineObject>) => void;
+  /** Set the pitchSet of an object; resets trim counts because the source set changed. */
   updatePitchSet: (id: string, next: PitchSet) => void;
   createObject: (position: number) => string;
   removeObject: (id: string) => void;
+  clearAll: () => void;
   cycleSelectAt: (beat: number, pitch: number) => void;
   setTempo: (bpm: number) => void;
   playing: boolean;
@@ -68,10 +87,27 @@ interface DocumentCtx {
 const Ctx = createContext<DocumentCtx | null>(null);
 
 export function DocumentProvider({ children }: { children: ReactNode }) {
-  const [doc, setDoc] = useState<DocumentState>(initialDoc);
-  const [selectedId, setSelectedId] = useState<string | null>(initialObject.id);
+  const persisted = useMemo(() => loadPersistedDoc(), []);
+  if (persisted) _idCounter = Math.max(_idCounter, persisted.idCounter);
+  const [doc, setDoc] = useState<DocumentState>(persisted?.doc ?? initialDoc);
+  const [selectedId, setSelectedId] = useState<string | null>(
+    persisted?.doc.objects[0]?.id ?? initialObject.id
+  );
   const [playing, setPlaying] = useState(false);
   const lastCyclePoint = useRef<{ beat: number; pitch: number } | null>(null);
+
+  // Persist on every document change.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ doc, idCounter: _idCounter })
+      );
+    } catch {
+      /* quota / privacy mode — silently ignore */
+    }
+  }, [doc]);
 
   const updateObject = useCallback((id: string, patch: Partial<TimelineObject>) => {
     setDoc((d) => ({
@@ -83,7 +119,9 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
   const updatePitchSet = useCallback((id: string, next: PitchSet) => {
     setDoc((d) => ({
       ...d,
-      objects: d.objects.map((o) => (o.id === id ? { ...o, pitchSet: next } : o)),
+      objects: d.objects.map((o) =>
+        o.id === id ? { ...o, pitchSet: next, topTrim: 0, bottomTrim: 0 } : o
+      ),
     }));
   }, []);
 
@@ -99,6 +137,11 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
     setSelectedId((s) => (s === id ? null : s));
   }, []);
 
+  const clearAll = useCallback(() => {
+    setDoc({ tempo: 120, objects: [] });
+    setSelectedId(null);
+  }, []);
+
   const cycleSelectAt = useCallback((beat: number, _pitch: number) => {
     setDoc((d) => {
       const hits = d.objects.filter((o) => beat >= o.position && beat < o.position + o.duration);
@@ -107,8 +150,6 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
         lastCyclePoint.current = null;
         return d;
       }
-      // If the last cycle point is nearby AND the selection is in the hits,
-      // advance through the stack. Otherwise select the first.
       const last = lastCyclePoint.current;
       const sameSpot = last && Math.abs(last.beat - beat) < 0.25;
       setSelectedId((prev) => {
@@ -136,12 +177,24 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
       updatePitchSet,
       createObject,
       removeObject,
+      clearAll,
       cycleSelectAt,
       setTempo,
       playing,
       setPlaying,
     }),
-    [doc, selectedId, updateObject, updatePitchSet, createObject, removeObject, cycleSelectAt, setTempo, playing]
+    [
+      doc,
+      selectedId,
+      updateObject,
+      updatePitchSet,
+      createObject,
+      removeObject,
+      clearAll,
+      cycleSelectAt,
+      setTempo,
+      playing,
+    ]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

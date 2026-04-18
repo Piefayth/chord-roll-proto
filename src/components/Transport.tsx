@@ -4,7 +4,7 @@ import { renderDocument } from '../model/render';
 import { ensureAudio, play, schedule, stop } from '../audio/engine';
 
 export function Transport() {
-  const { doc, setTempo, playing, setPlaying } = useDocument();
+  const { doc, setTempo, playing, setPlaying, clearAll } = useDocument();
   const initRef = useRef(false);
   const lastSnap = useRef<string>('');
 
@@ -52,6 +52,20 @@ export function Transport() {
           onChange={(e) => setTempo(Number(e.target.value))}
         />
       </label>
+      <button
+        type="button"
+        className="transport-clear"
+        aria-label="clear all objects"
+        onClick={() => {
+          if (playing) {
+            stop();
+            setPlaying(false);
+          }
+          if (window.confirm('Clear the whole song?')) clearAll();
+        }}
+      >
+        clear
+      </button>
     </div>
   );
 }

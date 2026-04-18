@@ -1,43 +1,59 @@
-import type { PitchSet } from './types';
+import type { PitchSet, TimelineObject } from './types';
 import { inferChordLabel } from './chords';
 
-// Canonical pool of intervals we'll consider when adding back a voice.
-// Covers triad tones, color tones, and common alterations/extensions.
-const CANONICAL_POOL = [0, 2, 3, 4, 5, 6, 7, 9, 10, 11, 13, 14, 15, 17, 18, 20, 21];
-
-function withIntervals(pitchSet: PitchSet, intervals: number[]): PitchSet {
-  const next = [...new Set(intervals)].sort((a, b) => a - b);
-  return { ...pitchSet, intervals: next, name: inferChordLabel(pitchSet.rootPC, next) };
+// Compute the effective pitch set for voicing: applies the object's top/bottom
+// trim counts. Trim never adds notes — it only slices off the top or bottom
+// of the user-chosen interval list.
+export function effectivePitchSet(obj: TimelineObject): PitchSet {
+  const sorted = [...new Set(obj.pitchSet.intervals)].sort((a, b) => a - b);
+  const top = Math.max(0, Math.floor(obj.topTrim ?? 0));
+  const bot = Math.max(0, Math.floor(obj.bottomTrim ?? 0));
+  // Always keep at least one note.
+  const maxTrim = Math.max(0, sorted.length - 1);
+  const totalTrim = Math.min(top + bot, maxTrim);
+  // Distribute the clamp: prefer keeping bottom if both request a lot.
+  let clampedBot = Math.min(bot, maxTrim);
+  let clampedTop = Math.min(top, maxTrim - clampedBot);
+  if (clampedTop + clampedBot > maxTrim) {
+    clampedBot = Math.max(0, maxTrim - clampedTop);
+  }
+  if (clampedTop + clampedBot > totalTrim) {
+    // impossible path, but keep types happy
+    clampedTop = Math.max(0, totalTrim - clampedBot);
+  }
+  const sliced = sorted.slice(clampedBot, sorted.length - clampedTop);
+  return {
+    ...obj.pitchSet,
+    intervals: sliced,
+    name: inferChordLabel(obj.pitchSet.rootPC, sliced),
+  };
 }
 
-// Drop the highest interval from the set. No-op if only root remains.
-export function removeTop(pitchSet: PitchSet): PitchSet {
-  const ivs = [...pitchSet.intervals].sort((a, b) => a - b);
-  if (ivs.length <= 1) return pitchSet;
-  ivs.pop();
-  return withIntervals(pitchSet, ivs);
+// Trim operations: they only adjust the counts. Voicing reads the effective
+// intervals at render time.
+export function incTopTrim(obj: TimelineObject): TimelineObject {
+  const sorted = [...new Set(obj.pitchSet.intervals)];
+  const top = Math.max(0, obj.topTrim ?? 0);
+  const bot = Math.max(0, obj.bottomTrim ?? 0);
+  const remaining = sorted.length - top - bot;
+  if (remaining <= 1) return obj;
+  return { ...obj, topTrim: top + 1 };
 }
-
-// Add the next interval above the current max from the canonical pool.
-// If the set already contains all pool items up through the top, no-op.
-export function addTop(pitchSet: PitchSet): PitchSet {
-  const ivs = [...pitchSet.intervals].sort((a, b) => a - b);
-  const max = ivs.length ? ivs[ivs.length - 1] : -1;
-  const next = CANONICAL_POOL.find((iv) => iv > max && !ivs.includes(iv));
-  if (next === undefined) return pitchSet;
-  return withIntervals(pitchSet, [...ivs, next]);
+export function decTopTrim(obj: TimelineObject): TimelineObject {
+  const top = Math.max(0, obj.topTrim ?? 0);
+  if (top <= 0) return obj;
+  return { ...obj, topTrim: top - 1 };
 }
-
-// Drop the lowest interval (rootless voicing when it's the root).
-export function removeBottom(pitchSet: PitchSet): PitchSet {
-  const ivs = [...pitchSet.intervals].sort((a, b) => a - b);
-  if (ivs.length <= 1) return pitchSet;
-  ivs.shift();
-  return withIntervals(pitchSet, ivs);
+export function incBottomTrim(obj: TimelineObject): TimelineObject {
+  const sorted = [...new Set(obj.pitchSet.intervals)];
+  const top = Math.max(0, obj.topTrim ?? 0);
+  const bot = Math.max(0, obj.bottomTrim ?? 0);
+  const remaining = sorted.length - top - bot;
+  if (remaining <= 1) return obj;
+  return { ...obj, bottomTrim: bot + 1 };
 }
-
-// Re-add the root (interval 0) if it's missing. No-op otherwise.
-export function addBottom(pitchSet: PitchSet): PitchSet {
-  if (pitchSet.intervals.includes(0)) return pitchSet;
-  return withIntervals(pitchSet, [...pitchSet.intervals, 0]);
+export function decBottomTrim(obj: TimelineObject): TimelineObject {
+  const bot = Math.max(0, obj.bottomTrim ?? 0);
+  if (bot <= 0) return obj;
+  return { ...obj, bottomTrim: bot - 1 };
 }

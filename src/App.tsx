@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import './App.css';
 import { DocumentProvider, useDocument } from './state/document';
-import { PianoRoll, applyPitchSetEdit } from './components/PianoRoll';
+import { PianoRoll, applyTrim } from './components/PianoRoll';
 import { Inspector } from './components/Inspector';
 import { Transport } from './components/Transport';
 import { usePlayhead } from './hooks/usePlayhead';
@@ -30,11 +30,11 @@ function Stage() {
             onCycleSelectAt={cycleSelectAt}
             onCreate={(beat) => createObject(beat)}
             onUpdate={(id, patch) => updateObject(id, patch)}
-            onUpdatePitchSet={(id, direction) => {
+            onTrim={(id, direction) => {
               const obj = doc.objects.find((o) => o.id === id);
               if (!obj) return;
-              const next = applyPitchSetEdit(obj, direction);
-              updateObject(id, { pitchSet: next.pitchSet });
+              const next = applyTrim(obj, direction);
+              updateObject(id, { topTrim: next.topTrim, bottomTrim: next.bottomTrim });
             }}
           />
         </div>

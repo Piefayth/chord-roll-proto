@@ -5,7 +5,7 @@ import { VoicingControls } from './VoicingControls';
 import { GeneratorControls } from './GeneratorControls';
 
 export function Inspector() {
-  const { doc, selectedId, updateObject, removeObject } = useDocument();
+  const { doc, selectedId, updateObject, updatePitchSet, removeObject } = useDocument();
   const obj = doc.objects.find((o) => o.id === selectedId);
 
   if (!obj) {
@@ -36,7 +36,7 @@ export function Inspector() {
       </div>
       <ChordPicker
         pitchSet={obj.pitchSet}
-        onChange={(pitchSet) => updateObject(obj.id, { pitchSet })}
+        onChange={(pitchSet) => updatePitchSet(obj.id, pitchSet)}
       />
       <VoicingControls
         pitchSet={obj.pitchSet}

@@ -1,47 +1,75 @@
 import { describe, it, expect } from 'vitest';
-import { addBottom, addTop, removeBottom, removeTop } from './pitchOps';
-import type { PitchSet } from './types';
+import { decBottomTrim, decTopTrim, effectivePitchSet, incBottomTrim, incTopTrim } from './pitchOps';
+import type { TimelineObject } from './types';
 
-const Cmaj7: PitchSet = { rootPC: 0, intervals: [0, 4, 7, 11], name: 'Cmaj7' };
-const C9: PitchSet = { rootPC: 0, intervals: [0, 4, 7, 10, 14], name: 'C9' };
+const baseObj: TimelineObject = {
+  id: 'x',
+  pitchSet: { rootPC: 0, intervals: [0, 4, 7, 11], name: 'Cmaj7' },
+  voicing: {
+    centerNote: 60,
+    bottomPitchClass: 0,
+    compactness: 0,
+    bassSplit: false,
+    bassDistance: 1,
+    octaveSpan: 1,
+    range: [21, 108],
+  },
+  generator: { pitchPattern: { kind: 'allAtOnce' }, rhythm: { kind: 'simultaneous' } },
+  position: 0,
+  duration: 4,
+};
 
-describe('pitchOps', () => {
-  it('removeTop drops the highest interval', () => {
-    expect(removeTop(Cmaj7).intervals).toEqual([0, 4, 7]);
+describe('effectivePitchSet', () => {
+  it('is a no-op when no trim is set', () => {
+    expect(effectivePitchSet(baseObj).intervals).toEqual([0, 4, 7, 11]);
   });
-
-  it('removeTop refuses to remove the last remaining interval', () => {
-    const single: PitchSet = { rootPC: 0, intervals: [0], name: 'C' };
-    expect(removeTop(single)).toEqual(single);
+  it('slices topTrim off the top', () => {
+    expect(effectivePitchSet({ ...baseObj, topTrim: 1 }).intervals).toEqual([0, 4, 7]);
   });
-
-  it('addTop pushes the next canonical interval above the current max', () => {
-    // Cmaj7 has max=11; next in pool > 11 is 13.
-    expect(addTop(Cmaj7).intervals).toEqual([0, 4, 7, 11, 13]);
+  it('slices bottomTrim off the bottom', () => {
+    expect(effectivePitchSet({ ...baseObj, bottomTrim: 1 }).intervals).toEqual([4, 7, 11]);
   });
-
-  it('addTop then removeTop is identity on this chord', () => {
-    const after = removeTop(addTop(Cmaj7));
-    expect(after.intervals).toEqual(Cmaj7.intervals);
+  it('re-derives the chord name from the effective intervals', () => {
+    expect(effectivePitchSet({ ...baseObj, topTrim: 1 }).name).toBe('Cmaj');
   });
-
-  it('removeBottom drops the root, producing a rootless voicing', () => {
-    expect(removeBottom(Cmaj7).intervals).toEqual([4, 7, 11]);
-    expect(removeBottom(Cmaj7).name).toMatch(/no root|\(/);
+  it('keeps at least one note when both trims are extreme', () => {
+    const e = effectivePitchSet({ ...baseObj, topTrim: 10, bottomTrim: 10 });
+    expect(e.intervals.length).toBeGreaterThanOrEqual(1);
   });
+});
 
-  it('addBottom re-adds the root after a rootless state', () => {
-    const rootless = removeBottom(Cmaj7);
-    const restored = addBottom(rootless);
-    expect(restored.intervals).toContain(0);
+describe('incTopTrim / decTopTrim', () => {
+  it('increments the top trim count', () => {
+    expect(incTopTrim(baseObj).topTrim).toBe(1);
   });
-
-  it('addTop on a chord with 9 adds something above 14', () => {
-    // Max is 14; next in pool > 14 is 15.
-    expect(addTop(C9).intervals).toEqual([0, 4, 7, 10, 14, 15]);
+  it('refuses to trim past one remaining note', () => {
+    const obj = { ...baseObj, topTrim: 3 }; // 4 intervals, 3 trimmed, 1 remains
+    expect(incTopTrim(obj).topTrim).toBe(3); // no-op
   });
+  it('decrement does not go below zero', () => {
+    expect(decTopTrim(baseObj).topTrim ?? 0).toBe(0);
+    expect(decTopTrim({ ...baseObj, topTrim: 2 }).topTrim).toBe(1);
+  });
+});
 
-  it('re-derives chord name after edit', () => {
-    expect(removeTop(Cmaj7).name).toBe('Cmaj');
+describe('incBottomTrim / decBottomTrim', () => {
+  it('increments the bottom trim count', () => {
+    expect(incBottomTrim(baseObj).bottomTrim).toBe(1);
+  });
+  it('refuses to trim past one remaining note', () => {
+    const obj = { ...baseObj, bottomTrim: 2, topTrim: 1 };
+    expect(incBottomTrim(obj).bottomTrim).toBe(2); // no-op
+  });
+  it('decrement does not go below zero', () => {
+    expect(decBottomTrim(baseObj).bottomTrim ?? 0).toBe(0);
+    expect(decBottomTrim({ ...baseObj, bottomTrim: 2 }).bottomTrim).toBe(1);
+  });
+});
+
+describe('round-trip', () => {
+  it('trim then untrim restores the original effective intervals', () => {
+    const trimmed = incTopTrim(incTopTrim(baseObj));
+    const restored = decTopTrim(decTopTrim(trimmed));
+    expect(effectivePitchSet(restored).intervals).toEqual([0, 4, 7, 11]);
   });
 });

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { DocumentProvider, useDocument } from './document';
+import type { PitchSet } from '../model/types';
 
 function wrapper({ children }: { children: React.ReactNode }) {
   return <DocumentProvider>{children}</DocumentProvider>;
@@ -45,6 +46,30 @@ describe('DocumentProvider', () => {
     act(() => result.current.removeObject(id));
     expect(result.current.doc.objects.find((o) => o.id === id)).toBeUndefined();
     expect(result.current.selectedId).toBeNull();
+  });
+
+  it('updatePitchSet resets topTrim and bottomTrim on the object', () => {
+    const { result } = renderHook(() => useDocument(), { wrapper });
+    const id = result.current.doc.objects[0].id;
+    act(() => result.current.updateObject(id, { topTrim: 1, bottomTrim: 1 }));
+    expect(result.current.doc.objects[0].topTrim).toBe(1);
+    const next: PitchSet = { rootPC: 0, intervals: [0, 4, 7], name: 'C' };
+    act(() => result.current.updatePitchSet(id, next));
+    const obj = result.current.doc.objects[0];
+    expect(obj.pitchSet).toEqual(next);
+    expect(obj.topTrim).toBe(0);
+    expect(obj.bottomTrim).toBe(0);
+  });
+
+  it('persists the document to localStorage and restores it on next mount', () => {
+    const first = renderHook(() => useDocument(), { wrapper });
+    const id = first.result.current.doc.objects[0].id;
+    act(() => first.result.current.updateObject(id, { duration: 7 }));
+    first.unmount();
+
+    const second = renderHook(() => useDocument(), { wrapper });
+    expect(second.result.current.doc.objects[0].id).toBe(id);
+    expect(second.result.current.doc.objects[0].duration).toBe(7);
   });
 
   it('cycleSelectAt picks the first hit, then advances on repeated taps', () => {

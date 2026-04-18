@@ -3,7 +3,13 @@ import type { RefObject } from 'react';
 import type { DocumentState, RenderedNote, TimelineObject } from '../model/types';
 import { renderObject } from '../model/render';
 import { pcName } from '../model/chords';
-import { addBottom, addTop, removeBottom, removeTop } from '../model/pitchOps';
+import {
+  decBottomTrim,
+  decTopTrim,
+  effectivePitchSet,
+  incBottomTrim,
+  incTopTrim,
+} from '../model/pitchOps';
 import { classifyZoneExtended, hitTest } from '../model/gestureOps';
 
 const MIN_PITCH = 36; // C2
@@ -17,6 +23,8 @@ const EDGE_TRIGGER_PX = 18;
 const BEAT_QUANTIZE = 0.25;
 const DRAG_START_THRESHOLD = 4;
 
+export type TrimDirection = 'topInc' | 'topDec' | 'bottomInc' | 'bottomDec';
+
 interface Props {
   doc: DocumentState;
   selectedId: string | null;
@@ -27,11 +35,12 @@ interface Props {
   onCycleSelectAt?: (beat: number, pitch: number) => void;
   onCreate?: (beatPosition: number) => void;
   onUpdate?: (id: string, patch: Partial<TimelineObject>) => void;
-  onUpdatePitchSet?: (id: string, direction: 'removeTop' | 'addTop' | 'removeBottom' | 'addBottom') => void;
+  onTrim?: (id: string, direction: TrimDirection) => void;
 }
 
 interface ObjectGeometry {
   obj: TimelineObject;
+  displayName: string;
   notes: RenderedNote[];
   x: number;
   y: number;
@@ -105,9 +114,9 @@ export function PianoRoll({
   onCycleSelectAt,
   onCreate,
   onUpdate,
-  onUpdatePitchSet,
+  onTrim,
 }: Props) {
-  const svgRef = useRef<SVGSVGElement | null>(null);
+  const gridRef = useRef<SVGSVGElement | null>(null);
   const dragRef = useRef<ActiveDrag | null>(null);
   const emptyTapRef = useRef<EmptyTap | null>(null);
   const pointersRef = useRef<Map<number, { clientX: number; clientY: number }>>(new Map());
@@ -124,16 +133,17 @@ export function PianoRoll({
       const y = midiToY(top) - REGION_PAD;
       const width = beatToX(obj.duration) + REGION_PAD * 2;
       const height = midiToY(bottom) - midiToY(top) + PITCH_ROW_PX + REGION_PAD * 2;
-      return { obj, notes, x, y, width, height };
+      const displayName = effectivePitchSet(obj).name;
+      return { obj, displayName, notes, x, y, width, height };
     });
   }, [doc]);
 
   const totalWidth = beatToX(totalBeats);
   const pitchRows = MAX_PITCH - MIN_PITCH + 1;
-  const totalHeight = RULER_HEIGHT + pitchRows * PITCH_ROW_PX;
+  const gridHeight = pitchRows * PITCH_ROW_PX;
 
   const svgCoords = useCallback((clientX: number, clientY: number): { x: number; y: number } => {
-    const svg = svgRef.current;
+    const svg = gridRef.current;
     if (!svg) return { x: 0, y: 0 };
     const pt = svg.createSVGPoint();
     pt.x = clientX;
@@ -144,12 +154,15 @@ export function PianoRoll({
     return { x: local.x, y: local.y };
   }, []);
 
-  // Given an SVG local point, find the topmost region whose inflated hit box
-  // contains it, along with the classified zone. Returns null on miss.
   const hitRegion = (svgX: number, svgY: number): { geom: ObjectGeometry; zone: DragZone } | null => {
     const inflated = geometries.map((g) => ({
       id: g.obj.id,
-      box: { x: g.x - OUTER_HANDLE, y: g.y - OUTER_HANDLE, width: g.width + 2 * OUTER_HANDLE, height: g.height + 2 * OUTER_HANDLE },
+      box: {
+        x: g.x - OUTER_HANDLE,
+        y: g.y - OUTER_HANDLE,
+        width: g.width + 2 * OUTER_HANDLE,
+        height: g.height + 2 * OUTER_HANDLE,
+      },
     }));
     const hits = hitTest(inflated, svgX, svgY);
     if (hits.length === 0) return null;
@@ -161,8 +174,6 @@ export function PianoRoll({
   };
 
   const enterPanMode = () => {
-    // Abort any in-flight single-finger interaction; stop sending updates but
-    // leave the object at whatever state it's already in (don't revert).
     dragRef.current = null;
     emptyTapRef.current = null;
     const scroller = scrollRef?.current;
@@ -176,19 +187,17 @@ export function PianoRoll({
     };
   };
 
-  const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== undefined && e.button !== 0) return;
     pointersRef.current.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
     try { (e.currentTarget as Element).setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
-
     if (pointersRef.current.size >= 2) {
       enterPanMode();
       return;
     }
-
-    // Single finger down.
     const { x: svgX, y: svgY } = svgCoords(e.clientX, e.clientY);
-    if (svgY < RULER_HEIGHT) return; // ignore ruler area
+    // Ruler lives above the grid; touches there map to negative y in grid coords.
+    if (svgY < 0) return;
     const hit = hitRegion(svgX, svgY);
     if (hit) {
       dragRef.current = {
@@ -214,11 +223,10 @@ export function PianoRoll({
     };
   };
 
-  const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!pointersRef.current.has(e.pointerId)) return;
     pointersRef.current.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
 
-    // Pan mode: translate average movement into scrollLeft/scrollTop.
     if (panRef.current && pointersRef.current.size >= 2) {
       const scroller = scrollRef?.current;
       if (!scroller) return;
@@ -268,8 +276,8 @@ export function PianoRoll({
           const steps = Math.trunc(dy / EDGE_TRIGGER_PX);
           const delta = steps - drag.lastStepCount;
           if (delta !== 0) {
-            const dir = delta > 0 ? 'removeTop' : 'addTop';
-            for (let i = 0; i < Math.abs(delta); i++) onUpdatePitchSet?.(drag.objId, dir);
+            const dir: TrimDirection = delta > 0 ? 'topInc' : 'topDec';
+            for (let i = 0; i < Math.abs(delta); i++) onTrim?.(drag.objId, dir);
             drag.lastStepCount = steps;
           }
           break;
@@ -278,8 +286,8 @@ export function PianoRoll({
           const steps = Math.trunc(dy / EDGE_TRIGGER_PX);
           const delta = steps - drag.lastStepCount;
           if (delta !== 0) {
-            const dir = delta > 0 ? 'addBottom' : 'removeBottom';
-            for (let i = 0; i < Math.abs(delta); i++) onUpdatePitchSet?.(drag.objId, dir);
+            const dir: TrimDirection = delta > 0 ? 'bottomDec' : 'bottomInc';
+            for (let i = 0; i < Math.abs(delta); i++) onTrim?.(drag.objId, dir);
             drag.lastStepCount = steps;
           }
           break;
@@ -300,21 +308,17 @@ export function PianoRoll({
     }
   };
 
-  const onPointerUp = (e: React.PointerEvent<SVGSVGElement>) => {
+  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     const hadPointer = pointersRef.current.delete(e.pointerId);
     if (!hadPointer) return;
-
-    // Exit pan mode when fewer than 2 pointers remain.
-    if (pointersRef.current.size < 2) {
-      panRef.current = null;
-    }
+    if (pointersRef.current.size < 2) panRef.current = null;
 
     const drag = dragRef.current;
     if (drag && drag.pointerId === e.pointerId) {
       if (!drag.didMove) {
         const { x, y } = svgCoords(e.clientX, e.clientY);
         const beat = xToBeat(x);
-        const pitch = yToPitch(y - RULER_HEIGHT);
+        const pitch = yToPitch(y);
         if (onCycleSelectAt) onCycleSelectAt(beat, pitch);
         else onSelect?.(drag.objId);
       }
@@ -332,181 +336,160 @@ export function PianoRoll({
   };
 
   return (
-    <div className="piano-roll-wrap" data-testid="piano-roll">
+    <div
+      className="piano-roll-wrap"
+      data-testid="piano-roll"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    >
+      {/* Ruler: sticky top inside the scroll container. */}
       <svg
-        ref={svgRef}
+        className="piano-ruler"
         width={totalWidth}
-        height={totalHeight}
-        viewBox={`0 0 ${totalWidth} ${totalHeight}`}
-        role="img"
-        aria-label="piano roll"
-        style={{ display: 'block', touchAction: 'none' }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
+        height={RULER_HEIGHT}
+        viewBox={`0 0 ${totalWidth} ${RULER_HEIGHT}`}
+        aria-hidden="true"
       >
-        {/* Ruler */}
-        <g>
-          <rect x={0} y={0} width={totalWidth} height={RULER_HEIGHT} fill="#111722" />
-          {Array.from({ length: totalBeats + 1 }).map((_, i) => (
-            <g key={i}>
-              <line
-                x1={i * BEAT_PX}
-                x2={i * BEAT_PX}
-                y1={0}
-                y2={RULER_HEIGHT}
-                stroke={i % 4 === 0 ? '#3a4a5e' : '#243042'}
-                strokeWidth={i % 4 === 0 ? 1.5 : 1}
-              />
-              {i % 4 === 0 && (
-                <text
-                  x={i * BEAT_PX + 4}
-                  y={RULER_HEIGHT - 5}
-                  fontSize={10}
-                  fill="#94a3b8"
-                  fontFamily="system-ui, sans-serif"
-                >
-                  {i / 4 + 1}
-                </text>
-              )}
-            </g>
-          ))}
-        </g>
-        <g transform={`translate(0, ${RULER_HEIGHT})`}>
-          {/* pitch rows */}
-          {Array.from({ length: pitchRows }).map((_, i) => {
-            const pitch = MAX_PITCH - i;
-            const pc = ((pitch % 12) + 12) % 12;
-            const isC = pc === 0;
-            const isBlack = [1, 3, 6, 8, 10].includes(pc);
-            return (
-              <rect
-                key={pitch}
-                x={0}
-                y={i * PITCH_ROW_PX}
-                width={totalWidth}
-                height={PITCH_ROW_PX}
-                fill={isC ? '#1d2530' : isBlack ? '#161a21' : '#1a1f27'}
-              />
-            );
-          })}
-          {/* beat lines */}
-          {Array.from({ length: totalBeats + 1 }).map((_, i) => (
+        <rect x={0} y={0} width={totalWidth} height={RULER_HEIGHT} fill="#111722" />
+        {Array.from({ length: totalBeats + 1 }).map((_, i) => (
+          <g key={i}>
             <line
-              key={i}
               x1={i * BEAT_PX}
               x2={i * BEAT_PX}
               y1={0}
-              y2={pitchRows * PITCH_ROW_PX}
+              y2={RULER_HEIGHT}
               stroke={i % 4 === 0 ? '#3a4a5e' : '#243042'}
               strokeWidth={i % 4 === 0 ? 1.5 : 1}
             />
-          ))}
-
-          {geometries.map((geom) => {
-            const { obj, notes, x, y, width, height } = geom;
-            const selected = obj.id === selectedId;
-            return (
-              <g key={obj.id} data-testid={`object-${obj.id}`}>
-                <rect
-                  x={x}
-                  y={y - RULER_HEIGHT}
-                  width={width}
-                  height={height}
-                  fill={selected ? 'rgba(96, 165, 250, 0.22)' : 'rgba(96, 165, 250, 0.10)'}
-                  stroke={selected ? '#60a5fa' : '#3a5a8a'}
-                  strokeWidth={selected ? 2 : 1}
-                  rx={4}
-                />
-                {notes.map((n) => (
-                  <rect
-                    key={n.id}
-                    data-testid={`note-${n.id}`}
-                    x={beatToX(n.onset)}
-                    y={midiToY(n.pitch) - RULER_HEIGHT}
-                    width={Math.max(2, beatToX(n.duration) - 2)}
-                    height={PITCH_ROW_PX - 1}
-                    fill={selected ? '#60a5fa' : '#7aa6d8'}
-                    rx={1.5}
-                  />
-                ))}
-                {selected && (
-                  <g pointerEvents="none">
-                    <rect
-                      x={x + 6}
-                      y={y - RULER_HEIGHT - 3}
-                      width={Math.max(12, width - 12)}
-                      height={3}
-                      fill="#60a5fa"
-                    />
-                    <rect
-                      x={x + 6}
-                      y={y - RULER_HEIGHT + height}
-                      width={Math.max(12, width - 12)}
-                      height={3}
-                      fill="#60a5fa"
-                    />
-                    <rect
-                      x={x - 3}
-                      y={y - RULER_HEIGHT + 6}
-                      width={3}
-                      height={Math.max(12, height - 12)}
-                      fill="#60a5fa"
-                    />
-                    <rect
-                      x={x + width}
-                      y={y - RULER_HEIGHT + 6}
-                      width={3}
-                      height={Math.max(12, height - 12)}
-                      fill="#60a5fa"
-                    />
-                  </g>
-                )}
-                <text
-                  x={x + 6}
-                  y={y - RULER_HEIGHT + 12}
-                  fill={selected ? '#dbeafe' : '#94b8e0'}
-                  fontSize={11}
-                  fontFamily="system-ui, sans-serif"
-                  pointerEvents="none"
-                >
-                  {obj.pitchSet.name} · {pcName(obj.voicing.bottomPitchClass)} bass
-                </text>
-              </g>
-            );
-          })}
-
-          {currentBeat >= 0 && (
-            <line
-              data-testid="playhead"
-              x1={beatToX(currentBeat)}
-              x2={beatToX(currentBeat)}
-              y1={0}
-              y2={pitchRows * PITCH_ROW_PX}
-              stroke="#fbbf24"
-              strokeWidth={1.5}
-              pointerEvents="none"
+            {i % 4 === 0 && (
+              <text
+                x={i * BEAT_PX + 4}
+                y={RULER_HEIGHT - 5}
+                fontSize={10}
+                fill="#94a3b8"
+                fontFamily="system-ui, sans-serif"
+              >
+                {i / 4 + 1}
+              </text>
+            )}
+          </g>
+        ))}
+      </svg>
+      {/* Main grid */}
+      <svg
+        ref={gridRef}
+        className="piano-grid"
+        width={totalWidth}
+        height={gridHeight}
+        viewBox={`0 0 ${totalWidth} ${gridHeight}`}
+        role="img"
+        aria-label="piano roll"
+      >
+        {Array.from({ length: pitchRows }).map((_, i) => {
+          const pitch = MAX_PITCH - i;
+          const pc = ((pitch % 12) + 12) % 12;
+          const isC = pc === 0;
+          const isBlack = [1, 3, 6, 8, 10].includes(pc);
+          return (
+            <rect
+              key={pitch}
+              x={0}
+              y={i * PITCH_ROW_PX}
+              width={totalWidth}
+              height={PITCH_ROW_PX}
+              fill={isC ? '#1d2530' : isBlack ? '#161a21' : '#1a1f27'}
             />
-          )}
-        </g>
+          );
+        })}
+        {Array.from({ length: totalBeats + 1 }).map((_, i) => (
+          <line
+            key={i}
+            x1={i * BEAT_PX}
+            x2={i * BEAT_PX}
+            y1={0}
+            y2={gridHeight}
+            stroke={i % 4 === 0 ? '#3a4a5e' : '#243042'}
+            strokeWidth={i % 4 === 0 ? 1.5 : 1}
+          />
+        ))}
+
+        {geometries.map((geom) => {
+          const { obj, displayName, notes, x, y, width, height } = geom;
+          const selected = obj.id === selectedId;
+          return (
+            <g key={obj.id} data-testid={`object-${obj.id}`}>
+              <rect
+                x={x}
+                y={y}
+                width={width}
+                height={height}
+                fill={selected ? 'rgba(96, 165, 250, 0.22)' : 'rgba(96, 165, 250, 0.10)'}
+                stroke={selected ? '#60a5fa' : '#3a5a8a'}
+                strokeWidth={selected ? 2 : 1}
+                rx={4}
+              />
+              {notes.map((n) => (
+                <rect
+                  key={n.id}
+                  data-testid={`note-${n.id}`}
+                  x={beatToX(n.onset)}
+                  y={midiToY(n.pitch)}
+                  width={Math.max(2, beatToX(n.duration) - 2)}
+                  height={PITCH_ROW_PX - 1}
+                  fill={selected ? '#60a5fa' : '#7aa6d8'}
+                  rx={1.5}
+                />
+              ))}
+              {selected && (
+                <g pointerEvents="none">
+                  <rect x={x + 6} y={y - 3} width={Math.max(12, width - 12)} height={3} fill="#60a5fa" />
+                  <rect x={x + 6} y={y + height} width={Math.max(12, width - 12)} height={3} fill="#60a5fa" />
+                  <rect x={x - 3} y={y + 6} width={3} height={Math.max(12, height - 12)} fill="#60a5fa" />
+                  <rect x={x + width} y={y + 6} width={3} height={Math.max(12, height - 12)} fill="#60a5fa" />
+                </g>
+              )}
+              <text
+                x={x + 6}
+                y={y + 12}
+                fill={selected ? '#dbeafe' : '#94b8e0'}
+                fontSize={11}
+                fontFamily="system-ui, sans-serif"
+                pointerEvents="none"
+              >
+                {displayName} · {pcName(obj.voicing.bottomPitchClass)} bass
+              </text>
+            </g>
+          );
+        })}
+
+        {currentBeat >= 0 && (
+          <line
+            data-testid="playhead"
+            x1={beatToX(currentBeat)}
+            x2={beatToX(currentBeat)}
+            y1={0}
+            y2={gridHeight}
+            stroke="#fbbf24"
+            strokeWidth={1.5}
+            pointerEvents="none"
+          />
+        )}
       </svg>
     </div>
   );
 }
 
-export function applyPitchSetEdit(
-  obj: TimelineObject,
-  direction: 'removeTop' | 'addTop' | 'removeBottom' | 'addBottom'
-): TimelineObject {
+export function applyTrim(obj: TimelineObject, direction: TrimDirection): TimelineObject {
   switch (direction) {
-    case 'removeTop':
-      return { ...obj, pitchSet: removeTop(obj.pitchSet) };
-    case 'addTop':
-      return { ...obj, pitchSet: addTop(obj.pitchSet) };
-    case 'removeBottom':
-      return { ...obj, pitchSet: removeBottom(obj.pitchSet) };
-    case 'addBottom':
-      return { ...obj, pitchSet: addBottom(obj.pitchSet) };
+    case 'topInc':
+      return incTopTrim(obj);
+    case 'topDec':
+      return decTopTrim(obj);
+    case 'bottomInc':
+      return incBottomTrim(obj);
+    case 'bottomDec':
+      return decBottomTrim(obj);
   }
 }

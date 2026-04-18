@@ -40,6 +40,11 @@ export interface TimelineObject {
   generator: Generator;
   position: number; // beats
   duration: number; // beats
+  // Edge-drag trim counts. Do not add new notes; only hide from the top or
+  // bottom of pitchSet.intervals. Reset to 0 whenever the ChordPicker changes
+  // the source set.
+  topTrim?: number;
+  bottomTrim?: number;
 }
 
 export interface RenderedNote {
