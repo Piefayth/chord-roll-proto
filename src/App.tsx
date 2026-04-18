@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import './App.css';
 import { DocumentProvider, useDocument } from './state/document';
 import { PianoRoll, applyPitchSetEdit } from './components/PianoRoll';
@@ -7,6 +8,7 @@ import { usePlayhead } from './hooks/usePlayhead';
 
 function Stage() {
   const { doc, selectedId, setSelectedId, updateObject, createObject, cycleSelectAt, playing } = useDocument();
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const loopBeats = Math.max(...doc.objects.map((o) => o.position + o.duration), 4);
   const currentBeat = usePlayhead(loopBeats, playing);
   const totalBeats = Math.max(16, Math.ceil(loopBeats / 4) * 4 + 4);
@@ -17,12 +19,13 @@ function Stage() {
         <Transport />
       </header>
       <main className="stage">
-        <div className="roll-scroll">
+        <div className="roll-scroll" ref={scrollRef}>
           <PianoRoll
             doc={doc}
             selectedId={selectedId}
             currentBeat={playing ? currentBeat : -1}
             totalBeats={totalBeats}
+            scrollRef={scrollRef}
             onSelect={setSelectedId}
             onCycleSelectAt={cycleSelectAt}
             onCreate={(beat) => createObject(beat)}

@@ -1,9 +1,10 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
+import type { RefObject } from 'react';
 import type { DocumentState, RenderedNote, TimelineObject } from '../model/types';
 import { renderObject } from '../model/render';
 import { pcName } from '../model/chords';
 import { addBottom, addTop, removeBottom, removeTop } from '../model/pitchOps';
-import { classifyZoneExtended } from '../model/gestureOps';
+import { classifyZoneExtended, hitTest } from '../model/gestureOps';
 
 const MIN_PITCH = 36; // C2
 const MAX_PITCH = 96; // C7
@@ -11,16 +12,17 @@ const PITCH_ROW_PX = 8;
 const BEAT_PX = 64;
 const REGION_PAD = 4;
 const RULER_HEIGHT = 18;
-const OUTER_HANDLE = 14; // px of hit area extending outside the region
-const EDGE_TRIGGER_PX = 18; // px of vertical drag per pitch add/remove step
+const OUTER_HANDLE = 14;
+const EDGE_TRIGGER_PX = 18;
 const BEAT_QUANTIZE = 0.25;
 const DRAG_START_THRESHOLD = 4;
 
 interface Props {
   doc: DocumentState;
   selectedId: string | null;
-  currentBeat: number; // <0 to hide
+  currentBeat: number;
   totalBeats?: number;
+  scrollRef?: RefObject<HTMLElement | null>;
   onSelect?: (id: string | null) => void;
   onCycleSelectAt?: (beat: number, pitch: number) => void;
   onCreate?: (beatPosition: number) => void;
@@ -51,6 +53,21 @@ interface ActiveDrag {
   didMove: boolean;
 }
 
+interface EmptyTap {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  beat: number;
+  moved: boolean;
+}
+
+interface PanState {
+  scrollLeft: number;
+  scrollTop: number;
+  avgClientX: number;
+  avgClientY: number;
+}
+
 function midiToY(pitch: number): number {
   return (MAX_PITCH - pitch) * PITCH_ROW_PX;
 }
@@ -67,13 +84,23 @@ function quantize(beat: number): number {
   return Math.max(0, Math.round(beat / BEAT_QUANTIZE) * BEAT_QUANTIZE);
 }
 
-// Classification is delegated to the pure helper in gestureOps.
+function averagePointer(pointers: Map<number, { clientX: number; clientY: number }>) {
+  let sx = 0;
+  let sy = 0;
+  for (const p of pointers.values()) {
+    sx += p.clientX;
+    sy += p.clientY;
+  }
+  const n = Math.max(1, pointers.size);
+  return { x: sx / n, y: sy / n };
+}
 
 export function PianoRoll({
   doc,
   selectedId,
   currentBeat,
   totalBeats = 16,
+  scrollRef,
   onSelect,
   onCycleSelectAt,
   onCreate,
@@ -82,6 +109,9 @@ export function PianoRoll({
 }: Props) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragRef = useRef<ActiveDrag | null>(null);
+  const emptyTapRef = useRef<EmptyTap | null>(null);
+  const pointersRef = useRef<Map<number, { clientX: number; clientY: number }>>(new Map());
+  const panRef = useRef<PanState | null>(null);
   const [, forceRerender] = useState(0);
 
   const geometries: ObjectGeometry[] = useMemo(() => {
@@ -114,146 +144,191 @@ export function PianoRoll({
     return { x: local.x, y: local.y };
   }, []);
 
-  // Pointer handlers are attached to individual region <g>s. Each <g> sets
-  // touch-action: none so iOS won't try to scroll while you drag it. The
-  // outer scroll container keeps its default touch-action so empty space
-  // allows two-direction panning.
-  const beginRegionDrag = (obj: TimelineObject, geom: ObjectGeometry, e: React.PointerEvent) => {
+  // Given an SVG local point, find the topmost region whose inflated hit box
+  // contains it, along with the classified zone. Returns null on miss.
+  const hitRegion = (svgX: number, svgY: number): { geom: ObjectGeometry; zone: DragZone } | null => {
+    const inflated = geometries.map((g) => ({
+      id: g.obj.id,
+      box: { x: g.x - OUTER_HANDLE, y: g.y - OUTER_HANDLE, width: g.width + 2 * OUTER_HANDLE, height: g.height + 2 * OUTER_HANDLE },
+    }));
+    const hits = hitTest(inflated, svgX, svgY);
+    if (hits.length === 0) return null;
+    const topId = hits[0];
+    const geom = geometries.find((g) => g.obj.id === topId)!;
+    const selected = topId === selectedId;
+    const zone = classifyZoneExtended(geom, svgX, svgY, OUTER_HANDLE, selected) ?? 'body';
+    return { geom, zone };
+  };
+
+  const enterPanMode = () => {
+    // Abort any in-flight single-finger interaction; stop sending updates but
+    // leave the object at whatever state it's already in (don't revert).
+    dragRef.current = null;
+    emptyTapRef.current = null;
+    const scroller = scrollRef?.current;
+    if (!scroller) return;
+    const avg = averagePointer(pointersRef.current);
+    panRef.current = {
+      scrollLeft: scroller.scrollLeft,
+      scrollTop: scroller.scrollTop,
+      avgClientX: avg.x,
+      avgClientY: avg.y,
+    };
+  };
+
+  const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     if (e.button !== undefined && e.button !== 0) return;
-    const { x, y } = svgCoords(e.clientX, e.clientY);
-    const selected = obj.id === selectedId;
-    const zone = classifyZoneExtended(geom, x, y, OUTER_HANDLE, selected) ?? 'body';
-    const drag: ActiveDrag = {
+    pointersRef.current.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+    try { (e.currentTarget as Element).setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
+
+    if (pointersRef.current.size >= 2) {
+      enterPanMode();
+      return;
+    }
+
+    // Single finger down.
+    const { x: svgX, y: svgY } = svgCoords(e.clientX, e.clientY);
+    if (svgY < RULER_HEIGHT) return; // ignore ruler area
+    const hit = hitRegion(svgX, svgY);
+    if (hit) {
+      dragRef.current = {
+        pointerId: e.pointerId,
+        zone: hit.zone,
+        objId: hit.geom.obj.id,
+        startX: e.clientX,
+        startY: e.clientY,
+        origPosition: hit.geom.obj.position,
+        origDuration: hit.geom.obj.duration,
+        origCenterNote: hit.geom.obj.voicing.centerNote,
+        lastStepCount: 0,
+        didMove: false,
+      };
+      return;
+    }
+    emptyTapRef.current = {
       pointerId: e.pointerId,
-      zone,
-      objId: obj.id,
       startX: e.clientX,
       startY: e.clientY,
-      origPosition: obj.position,
-      origDuration: obj.duration,
-      origCenterNote: obj.voicing.centerNote,
-      lastStepCount: 0,
-      didMove: false,
+      beat: Math.max(0, xToBeat(svgX)),
+      moved: false,
     };
-    dragRef.current = drag;
-    try { (e.currentTarget as Element).setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
-    e.stopPropagation();
   };
 
-  const onRegionPointerMove = (e: React.PointerEvent) => {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== e.pointerId) return;
-    const dx = e.clientX - drag.startX;
-    const dy = e.clientY - drag.startY;
-    if (!drag.didMove && Math.hypot(dx, dy) > DRAG_START_THRESHOLD) drag.didMove = true;
-    const beatDelta = dx / BEAT_PX;
-    const pitchDelta = -dy / PITCH_ROW_PX;
-    const obj = doc.objects.find((o) => o.id === drag.objId);
-    if (!obj) return;
+  const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (!pointersRef.current.has(e.pointerId)) return;
+    pointersRef.current.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
 
-    switch (drag.zone) {
-      case 'body': {
-        const nextPos = quantize(drag.origPosition + beatDelta);
-        const nextCenter = Math.max(MIN_PITCH, Math.min(MAX_PITCH, Math.round(drag.origCenterNote + pitchDelta)));
-        if (nextPos !== obj.position || nextCenter !== obj.voicing.centerNote) {
-          onUpdate?.(drag.objId, {
-            position: nextPos,
-            voicing: { ...obj.voicing, centerNote: nextCenter },
-          });
-        }
-        break;
-      }
-      case 'right': {
-        const nextDur = Math.max(BEAT_QUANTIZE, quantize(drag.origDuration + beatDelta));
-        if (nextDur !== obj.duration) onUpdate?.(drag.objId, { duration: nextDur });
-        break;
-      }
-      case 'left': {
-        const rawPos = quantize(drag.origPosition + beatDelta);
-        const anchorRight = drag.origPosition + drag.origDuration;
-        const nextPos = Math.max(0, Math.min(rawPos, anchorRight - BEAT_QUANTIZE));
-        const nextDur = Math.max(BEAT_QUANTIZE, anchorRight - nextPos);
-        if (nextPos !== obj.position || nextDur !== obj.duration) {
-          onUpdate?.(drag.objId, { position: nextPos, duration: nextDur });
-        }
-        break;
-      }
-      case 'top': {
-        const steps = Math.trunc(dy / EDGE_TRIGGER_PX);
-        const delta = steps - drag.lastStepCount;
-        if (delta !== 0) {
-          const dir = delta > 0 ? 'removeTop' : 'addTop';
-          for (let i = 0; i < Math.abs(delta); i++) onUpdatePitchSet?.(drag.objId, dir);
-          drag.lastStepCount = steps;
-        }
-        break;
-      }
-      case 'bottom': {
-        const steps = Math.trunc(dy / EDGE_TRIGGER_PX);
-        const delta = steps - drag.lastStepCount;
-        if (delta !== 0) {
-          const dir = delta > 0 ? 'addBottom' : 'removeBottom';
-          for (let i = 0; i < Math.abs(delta); i++) onUpdatePitchSet?.(drag.objId, dir);
-          drag.lastStepCount = steps;
-        }
-        break;
-      }
+    // Pan mode: translate average movement into scrollLeft/scrollTop.
+    if (panRef.current && pointersRef.current.size >= 2) {
+      const scroller = scrollRef?.current;
+      if (!scroller) return;
+      const avg = averagePointer(pointersRef.current);
+      scroller.scrollLeft = panRef.current.scrollLeft - (avg.x - panRef.current.avgClientX);
+      scroller.scrollTop = panRef.current.scrollTop - (avg.y - panRef.current.avgClientY);
+      return;
     }
-    forceRerender((n) => n + 1);
-  };
 
-  const onRegionPointerUp = (e: React.PointerEvent) => {
     const drag = dragRef.current;
-    if (!drag || drag.pointerId !== e.pointerId) return;
-    if (!drag.didMove) {
-      // Tap without a drag → select / cycle on stacked.
-      const { x, y } = svgCoords(e.clientX, e.clientY);
-      const beat = xToBeat(x);
-      const pitch = yToPitch(y - RULER_HEIGHT);
-      if (onCycleSelectAt) onCycleSelectAt(beat, pitch);
-      else onSelect?.(drag.objId);
+    if (drag && drag.pointerId === e.pointerId) {
+      const dx = e.clientX - drag.startX;
+      const dy = e.clientY - drag.startY;
+      if (!drag.didMove && Math.hypot(dx, dy) > DRAG_START_THRESHOLD) drag.didMove = true;
+      const beatDelta = dx / BEAT_PX;
+      const pitchDelta = -dy / PITCH_ROW_PX;
+      const obj = doc.objects.find((o) => o.id === drag.objId);
+      if (!obj) return;
+      switch (drag.zone) {
+        case 'body': {
+          const nextPos = quantize(drag.origPosition + beatDelta);
+          const nextCenter = Math.max(MIN_PITCH, Math.min(MAX_PITCH, Math.round(drag.origCenterNote + pitchDelta)));
+          if (nextPos !== obj.position || nextCenter !== obj.voicing.centerNote) {
+            onUpdate?.(drag.objId, {
+              position: nextPos,
+              voicing: { ...obj.voicing, centerNote: nextCenter },
+            });
+          }
+          break;
+        }
+        case 'right': {
+          const nextDur = Math.max(BEAT_QUANTIZE, quantize(drag.origDuration + beatDelta));
+          if (nextDur !== obj.duration) onUpdate?.(drag.objId, { duration: nextDur });
+          break;
+        }
+        case 'left': {
+          const rawPos = quantize(drag.origPosition + beatDelta);
+          const anchorRight = drag.origPosition + drag.origDuration;
+          const nextPos = Math.max(0, Math.min(rawPos, anchorRight - BEAT_QUANTIZE));
+          const nextDur = Math.max(BEAT_QUANTIZE, anchorRight - nextPos);
+          if (nextPos !== obj.position || nextDur !== obj.duration) {
+            onUpdate?.(drag.objId, { position: nextPos, duration: nextDur });
+          }
+          break;
+        }
+        case 'top': {
+          const steps = Math.trunc(dy / EDGE_TRIGGER_PX);
+          const delta = steps - drag.lastStepCount;
+          if (delta !== 0) {
+            const dir = delta > 0 ? 'removeTop' : 'addTop';
+            for (let i = 0; i < Math.abs(delta); i++) onUpdatePitchSet?.(drag.objId, dir);
+            drag.lastStepCount = steps;
+          }
+          break;
+        }
+        case 'bottom': {
+          const steps = Math.trunc(dy / EDGE_TRIGGER_PX);
+          const delta = steps - drag.lastStepCount;
+          if (delta !== 0) {
+            const dir = delta > 0 ? 'addBottom' : 'removeBottom';
+            for (let i = 0; i < Math.abs(delta); i++) onUpdatePitchSet?.(drag.objId, dir);
+            drag.lastStepCount = steps;
+          }
+          break;
+        }
+      }
+      forceRerender((n) => n + 1);
+      return;
     }
-    dragRef.current = null;
-  };
 
-  // Background pointer: empty-space tap creates an object (when no movement
-  // occurred). If the user scrolls with this same gesture, the browser fires
-  // pointercancel (or pointermove with significant delta) and we suppress.
-  const onBackgroundPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== undefined && e.button !== 0) return;
-    // Skip if the target element is a region handle (React handles that separately).
-    const { x, y } = svgCoords(e.clientX, e.clientY);
-    if (y < RULER_HEIGHT) return;
-    const startBeat = Math.max(0, xToBeat(x));
-    const startX = e.clientX;
-    const startY = e.clientY;
-    let moved = false;
-    const onMove = (ev: PointerEvent) => {
+    const tap = emptyTapRef.current;
+    if (tap && tap.pointerId === e.pointerId) {
       if (
-        Math.abs(ev.clientX - startX) > DRAG_START_THRESHOLD ||
-        Math.abs(ev.clientY - startY) > DRAG_START_THRESHOLD
+        Math.abs(e.clientX - tap.startX) > DRAG_START_THRESHOLD ||
+        Math.abs(e.clientY - tap.startY) > DRAG_START_THRESHOLD
       ) {
-        moved = true;
+        tap.moved = true;
       }
-    };
-    const cleanup = () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onCancel);
-    };
-    const onUp = () => {
-      cleanup();
-      if (!moved) {
+    }
+  };
+
+  const onPointerUp = (e: React.PointerEvent<SVGSVGElement>) => {
+    const hadPointer = pointersRef.current.delete(e.pointerId);
+    if (!hadPointer) return;
+
+    // Exit pan mode when fewer than 2 pointers remain.
+    if (pointersRef.current.size < 2) {
+      panRef.current = null;
+    }
+
+    const drag = dragRef.current;
+    if (drag && drag.pointerId === e.pointerId) {
+      if (!drag.didMove) {
+        const { x, y } = svgCoords(e.clientX, e.clientY);
+        const beat = xToBeat(x);
+        const pitch = yToPitch(y - RULER_HEIGHT);
+        if (onCycleSelectAt) onCycleSelectAt(beat, pitch);
+        else onSelect?.(drag.objId);
+      }
+      dragRef.current = null;
+      return;
+    }
+    const tap = emptyTapRef.current;
+    if (tap && tap.pointerId === e.pointerId) {
+      if (!tap.moved) {
         onSelect?.(null);
-        onCreate?.(quantize(startBeat));
+        onCreate?.(quantize(tap.beat));
       }
-    };
-    const onCancel = () => {
-      cleanup();
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onCancel);
+      emptyTapRef.current = null;
+    }
   };
 
   return (
@@ -265,8 +340,11 @@ export function PianoRoll({
         viewBox={`0 0 ${totalWidth} ${totalHeight}`}
         role="img"
         aria-label="piano roll"
-        style={{ display: 'block', touchAction: 'auto' }}
-        onPointerDown={onBackgroundPointerDown}
+        style={{ display: 'block', touchAction: 'none' }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
       >
         {/* Ruler */}
         <g>
@@ -326,31 +404,11 @@ export function PianoRoll({
             />
           ))}
 
-          {/* objects. note the transform is on the outer group; per-region <g>
-              is in the translated space, so its x/y are local. */}
           {geometries.map((geom) => {
             const { obj, notes, x, y, width, height } = geom;
             const selected = obj.id === selectedId;
             return (
-              <g
-                key={obj.id}
-                data-testid={`object-${obj.id}`}
-                style={{ touchAction: 'none' }}
-                onPointerDown={(e) => beginRegionDrag(obj, geom, e)}
-                onPointerMove={onRegionPointerMove}
-                onPointerUp={onRegionPointerUp}
-                onPointerCancel={onRegionPointerUp}
-              >
-                {/* Hit-area halo: includes outer handle margin. Transparent
-                    fill so users can grab edges even on very thin regions. */}
-                <rect
-                  x={x - OUTER_HANDLE}
-                  y={y - RULER_HEIGHT - OUTER_HANDLE}
-                  width={width + OUTER_HANDLE * 2}
-                  height={height + OUTER_HANDLE * 2}
-                  fill="transparent"
-                  transform={`translate(0, ${RULER_HEIGHT})`}
-                />
+              <g key={obj.id} data-testid={`object-${obj.id}`}>
                 <rect
                   x={x}
                   y={y - RULER_HEIGHT}
@@ -360,7 +418,6 @@ export function PianoRoll({
                   stroke={selected ? '#60a5fa' : '#3a5a8a'}
                   strokeWidth={selected ? 2 : 1}
                   rx={4}
-                  transform={`translate(0, ${RULER_HEIGHT})`}
                 />
                 {notes.map((n) => (
                   <rect
@@ -372,12 +429,10 @@ export function PianoRoll({
                     height={PITCH_ROW_PX - 1}
                     fill={selected ? '#60a5fa' : '#7aa6d8'}
                     rx={1.5}
-                    transform={`translate(0, ${RULER_HEIGHT})`}
                   />
                 ))}
                 {selected && (
-                  <g transform={`translate(0, ${RULER_HEIGHT})`} pointerEvents="none">
-                    {/* top handle */}
+                  <g pointerEvents="none">
                     <rect
                       x={x + 6}
                       y={y - RULER_HEIGHT - 3}
@@ -385,7 +440,6 @@ export function PianoRoll({
                       height={3}
                       fill="#60a5fa"
                     />
-                    {/* bottom handle */}
                     <rect
                       x={x + 6}
                       y={y - RULER_HEIGHT + height}
@@ -393,7 +447,6 @@ export function PianoRoll({
                       height={3}
                       fill="#60a5fa"
                     />
-                    {/* left handle */}
                     <rect
                       x={x - 3}
                       y={y - RULER_HEIGHT + 6}
@@ -401,7 +454,6 @@ export function PianoRoll({
                       height={Math.max(12, height - 12)}
                       fill="#60a5fa"
                     />
-                    {/* right handle */}
                     <rect
                       x={x + width}
                       y={y - RULER_HEIGHT + 6}
@@ -418,7 +470,6 @@ export function PianoRoll({
                   fontSize={11}
                   fontFamily="system-ui, sans-serif"
                   pointerEvents="none"
-                  transform={`translate(0, ${RULER_HEIGHT})`}
                 >
                   {obj.pitchSet.name} · {pcName(obj.voicing.bottomPitchClass)} bass
                 </text>

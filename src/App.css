@@ -67,11 +67,10 @@ body {
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
   max-height: 50vh;
-  -webkit-overflow-scrolling: touch;
-  /* Default — allow native two-direction scrolling on empty space. Regions
-     set touch-action: none on their own <g>s so dragging a region doesn't
-     scroll the container. */
-  touch-action: auto;
+  /* We own all touches: one finger = select/drag/create, two fingers = pan
+     the scroll via scrollLeft/scrollTop. */
+  touch-action: none;
+  overscroll-behavior: contain;
 }
 .piano-roll-wrap { display: inline-block; min-width: 100%; }
 
