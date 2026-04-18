@@ -1,0 +1,4 @@
+/* base reset; theme variables live in App.css */
+html, body { margin: 0; padding: 0; }
+* { -webkit-touch-callout: none; }
+button { font-family: inherit; }
